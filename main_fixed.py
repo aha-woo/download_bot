@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram Bot for downloading media from source channel and forwarding to target channel
+Fixed version with proper initialization
 """
 
 import asyncio
@@ -140,20 +141,6 @@ class TelegramMediaBot:
             bot_info = await self.application.bot.get_me()
             logger.info(f"机器人信息: {bot_info.first_name} (@{bot_info.username})")
             
-            # 检查机器人在目标频道中的权限
-            try:
-                bot_member = await self.application.bot.get_chat_member(
-                    self.config.target_channel_id, 
-                    bot_info.id
-                )
-                
-                if bot_member.status not in [ChatMember.ADMINISTRATOR, ChatMember.MEMBER]:
-                    logger.warning(f"机器人在目标频道 {self.config.target_channel_id} 中权限不足")
-                    return False
-            except TelegramError as e:
-                logger.warning(f"无法检查机器人在目标频道的权限: {e}")
-                # 继续运行，让机器人尝试发送消息来测试权限
-                
             return True
             
         except TelegramError as e:
@@ -166,16 +153,8 @@ class TelegramMediaBot:
             # 创建应用
             self.application = Application.builder().token(self.config.bot_token).build()
             
-            # 初始化应用
-            await self.application.initialize()
-            
             # 设置处理器
             self.setup_handlers()
-            
-            # 检查权限
-            if not await self.check_bot_permissions():
-                logger.error("机器人权限检查失败，请确保机器人已添加到频道并具有适当权限")
-                return
             
             # 创建下载目录
             download_path = Path(self.config.download_path)
