@@ -1,0 +1,27 @@
+[Unit]
+Description=Telegram Media Forward Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/download_bot
+Environment=PATH=/home/ubuntu/download_bot/venv/bin
+ExecStart=/home/ubuntu/download_bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-bot
+
+# 安全配置
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/ubuntu/download_bot
+
+[Install]
+WantedBy=multi-user.target
