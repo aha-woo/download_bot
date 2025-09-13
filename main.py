@@ -79,7 +79,12 @@ class TelegramMediaBot:
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理接收到的消息"""
-        message = update.message
+        # 处理频道消息和普通消息
+        message = update.message or update.channel_post
+        
+        if not message:
+            logger.warning("收到没有消息内容的更新")
+            return
         
         # 只处理来自源频道的消息
         if str(message.chat_id) != self.config.source_channel_id.lstrip('@-'):
