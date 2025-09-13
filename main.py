@@ -160,22 +160,25 @@ class TelegramMediaBot:
             logger.error(f"检查权限时出错: {e}")
             return False
     
+    async def startup_callback(self, application):
+        """启动回调函数"""
+        try:
+            # 检查权限
+            await self.check_bot_permissions()
+        except Exception as e:
+            logger.error(f"启动时检查权限失败: {e}")
+    
     async def run(self):
         """运行机器人"""
         try:
             # 创建应用
             self.application = Application.builder().token(self.config.bot_token).build()
             
-            # 初始化应用
-            await self.application.initialize()
-            
             # 设置处理器
             self.setup_handlers()
             
-            # 检查权限
-            if not await self.check_bot_permissions():
-                logger.error("机器人权限检查失败，请确保机器人已添加到频道并具有适当权限")
-                return
+            # 添加启动回调
+            self.application.post_init = self.startup_callback
             
             # 创建下载目录
             download_path = Path(self.config.download_path)
