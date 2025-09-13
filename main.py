@@ -172,18 +172,21 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # 使用兼容 PM2 的事件循环处理方式
+        # 使用最简单的方法，让 PM2 处理事件循环
+        import nest_asyncio
+        nest_asyncio.apply()
+        asyncio.run(main())
+    except ImportError:
+        # 如果没有 nest_asyncio，使用备用方法
         try:
-            # 尝试获取现有的事件循环
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # 如果没有事件循环，创建一个新的
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        # 运行主函数
-        loop.run_until_complete(main())
-        
+            asyncio.run(main())
+        except RuntimeError as e:
+            if "cannot be called from a running event loop" in str(e):
+                # 在 PM2 环境中，直接运行而不创建新的事件循环
+                loop = asyncio.get_event_loop()
+                loop.run_until_complete(main())
+            else:
+                raise
     except KeyboardInterrupt:
         logger.info("机器人已停止")
     except Exception as e:
