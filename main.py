@@ -6,6 +6,7 @@ Telegram Bot for downloading media from source channel and forwarding to target 
 import asyncio
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 from typing import Optional
@@ -165,20 +166,58 @@ class TelegramMediaBot:
             
         except Exception as e:
             logger.error(f"机器人运行出错: {e}")
+            # 确保应用被正确关闭
+            if self.application:
+                try:
+                    await self.application.shutdown()
+                except Exception as shutdown_error:
+                    logger.error(f"关闭应用时出错: {shutdown_error}")
             raise
 
 
 async def main():
     """主函数"""
     bot = TelegramMediaBot()
-    await bot.run()
+    
+    # 设置信号处理器
+    def signal_handler(signum, frame):
+        logger.info(f"收到信号 {signum}，正在关闭机器人...")
+        if bot.application:
+            asyncio.create_task(bot.application.stop())
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    try:
+        await bot.run()
+    except asyncio.CancelledError:
+        logger.info("机器人被取消")
+    except Exception as e:
+        logger.error(f"机器人运行出错: {e}")
+        raise
 
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("机器人已停止")
+        # 使用更兼容的事件循环处理方式
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(main())
+        except KeyboardInterrupt:
+            logger.info("机器人已停止")
+        finally:
+            # 清理事件循环
+            try:
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            except Exception as e:
+                logger.error(f"清理任务时出错: {e}")
+            finally:
+                loop.close()
     except Exception as e:
         logger.error(f"程序异常退出: {e}")
         sys.exit(1)
