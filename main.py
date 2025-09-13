@@ -45,10 +45,22 @@ class TelegramMediaBot:
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令"""
         await update.message.reply_text(
-            "🤖 Telegram媒体转发机器人已启动！\n"
-            f"源频道: {self.config.source_channel_id}\n"
-            f"目标频道: {self.config.target_channel_id}\n"
-            "机器人将自动监听源频道的消息并转发到目标频道。"
+            "🤖 Telegram媒体转发机器人已启动！\n\n"
+            f"📡 源频道: {self.config.source_channel_id}\n"
+            f"📤 目标频道: {self.config.target_channel_id}\n\n"
+            "🔄 自动功能:\n"
+            "• 自动监听源频道新消息并转发\n\n"
+            "🛠️ 手动命令:\n"
+            "• /status - 查看机器人状态\n"
+            "• /random_download <数量> - 随机下载N条历史消息\n"
+            "• /selective_forward keyword <关键词> - 按关键词转发\n"
+            "• /selective_forward type <类型> - 按消息类型转发\n"
+            "• /selective_forward recent <数量> - 转发最近N条消息\n\n"
+            "📝 使用示例:\n"
+            "• /random_download 5\n"
+            "• /selective_forward keyword 新品\n"
+            "• /selective_forward type photo\n"
+            "• /selective_forward recent 10"
         )
         
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,6 +88,276 @@ class TelegramMediaBot:
         except Exception as e:
             logger.error(f"获取状态时出错: {e}")
             await update.message.reply_text(f"获取状态时出错: {str(e)}")
+    
+    async def random_download_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理 /random_download 命令 - 随机下载N个历史消息"""
+        try:
+            # 获取参数
+            if not context.args:
+                await update.message.reply_text(
+                    "❌ 请指定要下载的消息数量\n"
+                    "用法: /random_download <数量>\n"
+                    "例如: /random_download 5"
+                )
+                return
+            
+            try:
+                count = int(context.args[0])
+                if count <= 0 or count > 50:
+                    await update.message.reply_text("❌ 数量必须在1-50之间")
+                    return
+            except ValueError:
+                await update.message.reply_text("❌ 请输入有效的数字")
+                return
+            
+            await update.message.reply_text(f"🔄 开始随机下载 {count} 条历史消息...")
+            
+            # 获取源频道的历史消息
+            messages = []
+            async for message in context.bot.get_chat_history(
+                chat_id=self.config.source_channel_id, 
+                limit=100  # 获取最近100条消息作为候选
+            ):
+                messages.append(message)
+            
+            if not messages:
+                await update.message.reply_text("❌ 源频道没有找到历史消息")
+                return
+            
+            # 随机选择N条消息
+            import random
+            selected_messages = random.sample(messages, min(count, len(messages)))
+            
+            success_count = 0
+            for i, message in enumerate(selected_messages, 1):
+                try:
+                    await update.message.reply_text(f"📥 正在处理第 {i}/{len(selected_messages)} 条消息...")
+                    
+                    # 检查消息是否包含媒体
+                    if self.bot_handler.has_media(message):
+                        # 下载媒体文件
+                        downloaded_files = await self.media_downloader.download_media(message)
+                        
+                        if downloaded_files:
+                            # 转发消息到目标频道
+                            await self.bot_handler.forward_message(message, downloaded_files)
+                            success_count += 1
+                            logger.info(f"成功转发历史消息 {message.message_id} 到目标频道")
+                        else:
+                            logger.warning(f"历史消息 {message.message_id} 没有可下载的媒体文件")
+                    else:
+                        # 转发纯文本消息
+                        await self.bot_handler.forward_text_message(message)
+                        success_count += 1
+                        logger.info(f"成功转发历史文本消息 {message.message_id} 到目标频道")
+                        
+                except Exception as e:
+                    logger.error(f"处理历史消息 {message.message_id} 时出错: {e}")
+                    continue
+            
+            await update.message.reply_text(
+                f"✅ 随机下载完成！\n"
+                f"成功处理: {success_count}/{len(selected_messages)} 条消息"
+            )
+            
+        except Exception as e:
+            logger.error(f"随机下载命令执行出错: {e}")
+            await update.message.reply_text(f"❌ 随机下载失败: {str(e)}")
+    
+    async def selective_forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """处理 /selective_forward 命令 - 选择性转发"""
+        try:
+            if not context.args:
+                await update.message.reply_text(
+                    "❌ 请指定转发条件\n"
+                    "用法: /selective_forward <条件>\n"
+                    "支持的条件:\n"
+                    "• 关键词: /selective_forward keyword <关键词>\n"
+                    "• 消息类型: /selective_forward type <photo|video|document|text>\n"
+                    "• 最近N条: /selective_forward recent <数量>\n"
+                    "例如: /selective_forward keyword 新品\n"
+                    "例如: /selective_forward type photo\n"
+                    "例如: /selective_forward recent 10"
+                )
+                return
+            
+            condition_type = context.args[0].lower()
+            
+            if condition_type == "keyword" and len(context.args) > 1:
+                # 关键词过滤
+                keyword = " ".join(context.args[1:])
+                await self._forward_by_keyword(update, context, keyword)
+                
+            elif condition_type == "type" and len(context.args) > 1:
+                # 消息类型过滤
+                msg_type = context.args[1].lower()
+                await self._forward_by_type(update, context, msg_type)
+                
+            elif condition_type == "recent" and len(context.args) > 1:
+                # 最近N条消息
+                try:
+                    count = int(context.args[1])
+                    await self._forward_recent_messages(update, context, count)
+                except ValueError:
+                    await update.message.reply_text("❌ 请输入有效的数量")
+                    
+            else:
+                await update.message.reply_text("❌ 无效的条件类型")
+                
+        except Exception as e:
+            logger.error(f"选择性转发命令执行出错: {e}")
+            await update.message.reply_text(f"❌ 选择性转发失败: {str(e)}")
+    
+    async def _forward_by_keyword(self, update: Update, context: ContextTypes.DEFAULT_TYPE, keyword: str):
+        """根据关键词转发消息"""
+        await update.message.reply_text(f"🔍 正在搜索包含关键词 '{keyword}' 的消息...")
+        
+        matched_messages = []
+        async for message in context.bot.get_chat_history(
+            chat_id=self.config.source_channel_id, 
+            limit=100
+        ):
+            # 检查消息文本或说明文字是否包含关键词
+            text_content = ""
+            if message.text:
+                text_content += message.text
+            if message.caption:
+                text_content += message.caption
+            
+            if keyword.lower() in text_content.lower():
+                matched_messages.append(message)
+        
+        if not matched_messages:
+            await update.message.reply_text(f"❌ 没有找到包含关键词 '{keyword}' 的消息")
+            return
+        
+        await update.message.reply_text(f"📋 找到 {len(matched_messages)} 条匹配的消息，开始转发...")
+        
+        success_count = 0
+        for i, message in enumerate(matched_messages, 1):
+            try:
+                await update.message.reply_text(f"📤 正在转发第 {i}/{len(matched_messages)} 条消息...")
+                
+                if self.bot_handler.has_media(message):
+                    downloaded_files = await self.media_downloader.download_media(message)
+                    if downloaded_files:
+                        await self.bot_handler.forward_message(message, downloaded_files)
+                        success_count += 1
+                else:
+                    await self.bot_handler.forward_text_message(message)
+                    success_count += 1
+                    
+            except Exception as e:
+                logger.error(f"转发关键词匹配消息时出错: {e}")
+                continue
+        
+        await update.message.reply_text(
+            f"✅ 关键词转发完成！\n"
+            f"成功转发: {success_count}/{len(matched_messages)} 条消息"
+        )
+    
+    async def _forward_by_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE, msg_type: str):
+        """根据消息类型转发"""
+        type_mapping = {
+            'photo': 'photo',
+            'video': 'video', 
+            'document': 'document',
+            'text': 'text',
+            'audio': 'audio',
+            'voice': 'voice'
+        }
+        
+        if msg_type not in type_mapping:
+            await update.message.reply_text(
+                f"❌ 不支持的消息类型: {msg_type}\n"
+                f"支持的类型: {', '.join(type_mapping.keys())}"
+            )
+            return
+        
+        await update.message.reply_text(f"🔍 正在搜索 {msg_type} 类型的消息...")
+        
+        matched_messages = []
+        async for message in context.bot.get_chat_history(
+            chat_id=self.config.source_channel_id, 
+            limit=100
+        ):
+            if msg_type == 'text' and message.text and not message.photo and not message.video and not message.document:
+                matched_messages.append(message)
+            elif msg_type != 'text' and getattr(message, msg_type, None):
+                matched_messages.append(message)
+        
+        if not matched_messages:
+            await update.message.reply_text(f"❌ 没有找到 {msg_type} 类型的消息")
+            return
+        
+        await update.message.reply_text(f"📋 找到 {len(matched_messages)} 条 {msg_type} 类型的消息，开始转发...")
+        
+        success_count = 0
+        for i, message in enumerate(matched_messages, 1):
+            try:
+                await update.message.reply_text(f"📤 正在转发第 {i}/{len(matched_messages)} 条消息...")
+                
+                if self.bot_handler.has_media(message):
+                    downloaded_files = await self.media_downloader.download_media(message)
+                    if downloaded_files:
+                        await self.bot_handler.forward_message(message, downloaded_files)
+                        success_count += 1
+                else:
+                    await self.bot_handler.forward_text_message(message)
+                    success_count += 1
+                    
+            except Exception as e:
+                logger.error(f"转发类型匹配消息时出错: {e}")
+                continue
+        
+        await update.message.reply_text(
+            f"✅ 类型转发完成！\n"
+            f"成功转发: {success_count}/{len(matched_messages)} 条消息"
+        )
+    
+    async def _forward_recent_messages(self, update: Update, context: ContextTypes.DEFAULT_TYPE, count: int):
+        """转发最近N条消息"""
+        if count <= 0 or count > 50:
+            await update.message.reply_text("❌ 数量必须在1-50之间")
+            return
+        
+        await update.message.reply_text(f"🔍 正在获取最近 {count} 条消息...")
+        
+        recent_messages = []
+        async for message in context.bot.get_chat_history(
+            chat_id=self.config.source_channel_id, 
+            limit=count
+        ):
+            recent_messages.append(message)
+        
+        if not recent_messages:
+            await update.message.reply_text("❌ 没有找到历史消息")
+            return
+        
+        await update.message.reply_text(f"📋 找到 {len(recent_messages)} 条最近消息，开始转发...")
+        
+        success_count = 0
+        for i, message in enumerate(recent_messages, 1):
+            try:
+                await update.message.reply_text(f"📤 正在转发第 {i}/{len(recent_messages)} 条消息...")
+                
+                if self.bot_handler.has_media(message):
+                    downloaded_files = await self.media_downloader.download_media(message)
+                    if downloaded_files:
+                        await self.bot_handler.forward_message(message, downloaded_files)
+                        success_count += 1
+                else:
+                    await self.bot_handler.forward_text_message(message)
+                    success_count += 1
+                    
+            except Exception as e:
+                logger.error(f"转发最近消息时出错: {e}")
+                continue
+        
+        await update.message.reply_text(
+            f"✅ 最近消息转发完成！\n"
+            f"成功转发: {success_count}/{len(recent_messages)} 条消息"
+        )
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理接收到的消息"""
@@ -121,6 +403,8 @@ class TelegramMediaBot:
         # 命令处理器
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
+        self.application.add_handler(CommandHandler("random_download", self.random_download_command))
+        self.application.add_handler(CommandHandler("selective_forward", self.selective_forward_command))
         
         # 消息处理器
         self.application.add_handler(MessageHandler(
@@ -144,29 +428,44 @@ class TelegramMediaBot:
     
     async def run(self):
         """运行机器人"""
-        # 创建应用
-        self.application = Application.builder().token(self.config.bot_token).build()
-        
-        # 设置处理器
-        self.setup_handlers()
-        
-        # 添加启动回调
-        self.application.post_init = self.startup_callback
-        
-        # 创建下载目录
-        download_path = Path(self.config.download_path)
-        download_path.mkdir(exist_ok=True)
-        
-        logger.info("🤖 Telegram媒体转发机器人启动成功！")
-        logger.info(f"源频道: {self.config.source_channel_id}")
-        logger.info(f"目标频道: {self.config.target_channel_id}")
-        logger.info(f"下载目录: {download_path.absolute()}")
-        
-        # 启动机器人
-        await self.application.run_polling(
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
-        )
+        try:
+            # 创建应用
+            self.application = Application.builder().token(self.config.bot_token).build()
+            
+            # 设置处理器
+            self.setup_handlers()
+            
+            # 添加启动回调
+            self.application.post_init = self.startup_callback
+            
+            # 创建下载目录
+            download_path = Path(self.config.download_path)
+            download_path.mkdir(exist_ok=True)
+            
+            logger.info("🤖 Telegram媒体转发机器人启动成功！")
+            logger.info(f"源频道: {self.config.source_channel_id}")
+            logger.info(f"目标频道: {self.config.target_channel_id}")
+            logger.info(f"下载目录: {download_path.absolute()}")
+            
+            # 启动机器人
+            await self.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
+            
+        except asyncio.CancelledError:
+            logger.info("机器人被取消")
+            raise
+        except Exception as e:
+            logger.error(f"机器人运行出错: {e}")
+            raise
+        finally:
+            # 确保应用被正确关闭
+            if self.application:
+                try:
+                    await self.application.shutdown()
+                except Exception as shutdown_error:
+                    logger.error(f"关闭应用时出错: {shutdown_error}")
 
 
 async def main():
@@ -194,6 +493,8 @@ if __name__ == "__main__":
                 raise
     except KeyboardInterrupt:
         logger.info("机器人已停止")
+    except asyncio.CancelledError:
+        logger.info("机器人被取消")
     except Exception as e:
         logger.error(f"程序异常退出: {e}")
         sys.exit(1)
