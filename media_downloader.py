@@ -24,7 +24,7 @@ class MediaDownloader:
         self.download_path = Path(config.download_path)
         self.download_path.mkdir(exist_ok=True)
     
-    async def download_media(self, message: Message) -> List[Path]:
+    async def download_media(self, message: Message, bot=None) -> List[Path]:
         """下载消息中的媒体文件"""
         downloaded_files = []
         
@@ -51,7 +51,7 @@ class MediaDownloader:
             
             # 下载文件
             logger.info(f"开始下载文件: {file_name}")
-            await self._download_file(message, media_info, file_path)
+            await self._download_file(message, media_info, file_path, bot)
             
             if file_path.exists() and file_path.stat().st_size > 0:
                 downloaded_files.append(file_path)
@@ -190,11 +190,16 @@ class MediaDownloader:
             filename = name[:250] + '.' + ext
         return filename
     
-    async def _download_file(self, message: Message, media_info: dict, file_path: Path):
+    async def _download_file(self, message: Message, media_info: dict, file_path: Path, bot=None):
         """下载文件"""
         try:
+            # 获取bot实例
+            bot_instance = bot or getattr(message, 'bot', None)
+            if not bot_instance:
+                raise ValueError("无法获取bot实例")
+            
             # 获取文件对象
-            file = await message.bot.get_file(media_info['file_id'])
+            file = await bot_instance.get_file(media_info['file_id'])
             
             # 下载文件
             await file.download_to_drive(file_path)

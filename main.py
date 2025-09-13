@@ -114,7 +114,7 @@ class TelegramMediaBot:
             
             # 获取源频道的历史消息
             messages = []
-            # 使用正确的方法获取历史消息
+            # 使用替代方法获取历史消息
             try:
                 # 尝试获取聊天历史
                 chat_history = await context.bot.get_chat_history(
@@ -125,13 +125,10 @@ class TelegramMediaBot:
                     messages.append(message)
             except AttributeError:
                 # 如果 get_chat_history 不存在，使用备用方法
-                # 通过获取聊天信息来验证频道存在
-                try:
-                    chat = await context.bot.get_chat(self.config.source_channel_id)
-                    await update.message.reply_text(f"❌ 当前版本不支持获取历史消息功能\n频道: {chat.title}")
-                    return
-                except Exception as e:
-                    await update.message.reply_text(f"❌ 无法访问源频道: {str(e)}")
+                await update.message.reply_text("🔄 使用替代方法获取历史消息...")
+                messages = await self._get_recent_messages_alternative(context.bot, 100)
+                if not messages:
+                    await update.message.reply_text("❌ 无法获取历史消息，请确保机器人有访问权限")
                     return
             
             if not messages:
@@ -150,7 +147,7 @@ class TelegramMediaBot:
                     # 检查消息是否包含媒体
                     if self.bot_handler.has_media(message):
                         # 下载媒体文件
-                        downloaded_files = await self.media_downloader.download_media(message)
+                        downloaded_files = await self.media_downloader.download_media(message, context.bot)
                         
                         if downloaded_files:
                             # 转发消息到目标频道
@@ -243,8 +240,18 @@ class TelegramMediaBot:
                 if keyword.lower() in text_content.lower():
                     matched_messages.append(message)
         except AttributeError:
-            await update.message.reply_text("❌ 当前版本不支持获取历史消息功能")
-            return
+            # 使用替代方法
+            await update.message.reply_text("🔄 使用替代方法搜索消息...")
+            all_messages = await self._get_recent_messages_alternative(context.bot, 100)
+            for message in all_messages:
+                text_content = ""
+                if message.text:
+                    text_content += message.text
+                if message.caption:
+                    text_content += message.caption
+                
+                if keyword.lower() in text_content.lower():
+                    matched_messages.append(message)
         
         if not matched_messages:
             await update.message.reply_text(f"❌ 没有找到包含关键词 '{keyword}' 的消息")
@@ -258,7 +265,7 @@ class TelegramMediaBot:
                 await update.message.reply_text(f"📤 正在转发第 {i}/{len(matched_messages)} 条消息...")
                 
                 if self.bot_handler.has_media(message):
-                    downloaded_files = await self.media_downloader.download_media(message)
+                    downloaded_files = await self.media_downloader.download_media(message, context.bot)
                     if downloaded_files:
                         await self.bot_handler.forward_message(message, downloaded_files)
                         success_count += 1
@@ -307,8 +314,14 @@ class TelegramMediaBot:
                 elif msg_type != 'text' and getattr(message, msg_type, None):
                     matched_messages.append(message)
         except AttributeError:
-            await update.message.reply_text("❌ 当前版本不支持获取历史消息功能")
-            return
+            # 使用替代方法
+            await update.message.reply_text("🔄 使用替代方法搜索消息...")
+            all_messages = await self._get_recent_messages_alternative(context.bot, 100)
+            for message in all_messages:
+                if msg_type == 'text' and message.text and not message.photo and not message.video and not message.document:
+                    matched_messages.append(message)
+                elif msg_type != 'text' and getattr(message, msg_type, None):
+                    matched_messages.append(message)
         
         if not matched_messages:
             await update.message.reply_text(f"❌ 没有找到 {msg_type} 类型的消息")
@@ -322,7 +335,7 @@ class TelegramMediaBot:
                 await update.message.reply_text(f"📤 正在转发第 {i}/{len(matched_messages)} 条消息...")
                 
                 if self.bot_handler.has_media(message):
-                    downloaded_files = await self.media_downloader.download_media(message)
+                    downloaded_files = await self.media_downloader.download_media(message, context.bot)
                     if downloaded_files:
                         await self.bot_handler.forward_message(message, downloaded_files)
                         success_count += 1
@@ -356,8 +369,9 @@ class TelegramMediaBot:
             async for message in chat_history:
                 recent_messages.append(message)
         except AttributeError:
-            await update.message.reply_text("❌ 当前版本不支持获取历史消息功能")
-            return
+            # 使用替代方法
+            await update.message.reply_text("🔄 使用替代方法获取消息...")
+            recent_messages = await self._get_recent_messages_alternative(context.bot, count)
         
         if not recent_messages:
             await update.message.reply_text("❌ 没有找到历史消息")
@@ -371,7 +385,7 @@ class TelegramMediaBot:
                 await update.message.reply_text(f"📤 正在转发第 {i}/{len(recent_messages)} 条消息...")
                 
                 if self.bot_handler.has_media(message):
-                    downloaded_files = await self.media_downloader.download_media(message)
+                    downloaded_files = await self.media_downloader.download_media(message, context.bot)
                     if downloaded_files:
                         await self.bot_handler.forward_message(message, downloaded_files)
                         success_count += 1
@@ -387,6 +401,26 @@ class TelegramMediaBot:
             f"✅ 最近消息转发完成！\n"
             f"成功转发: {success_count}/{len(recent_messages)} 条消息"
         )
+    
+    async def _get_recent_messages_alternative(self, bot, limit: int = 100):
+        """使用替代方法获取最近的消息"""
+        try:
+            # 获取最近的更新
+            updates = await bot.get_updates(limit=limit, timeout=1)
+            messages = []
+            
+            for update_obj in updates:
+                message = update_obj.message or update_obj.channel_post
+                if message and str(message.chat_id) == str(self.config.source_channel_id).lstrip('@-'):
+                    messages.append(message)
+            
+            # 按时间排序，最新的在前
+            messages.sort(key=lambda x: x.date, reverse=True)
+            return messages[:limit]
+            
+        except Exception as e:
+            logger.error(f"获取历史消息失败: {e}")
+            return []
     
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理接收到的消息"""
@@ -426,7 +460,7 @@ class TelegramMediaBot:
             # 检查消息是否包含媒体
             if self.bot_handler.has_media(message):
                 # 下载媒体文件
-                downloaded_files = await self.media_downloader.download_media(message)
+                downloaded_files = await self.media_downloader.download_media(message, context.bot)
                 
                 if downloaded_files:
                     # 转发消息到目标频道
