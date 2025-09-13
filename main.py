@@ -125,48 +125,16 @@ class TelegramMediaBot:
         # 错误处理器
         self.application.add_error_handler(self.error_handler)
     
-    async def check_bot_permissions(self):
-        """检查机器人在频道中的权限"""
-        try:
-            # 检查源频道权限
-            source_chat = await self.application.bot.get_chat(self.config.source_channel_id)
-            logger.info(f"源频道信息: {source_chat.title} (ID: {source_chat.id})")
-            
-            # 检查目标频道权限
-            target_chat = await self.application.bot.get_chat(self.config.target_channel_id)
-            logger.info(f"目标频道信息: {target_chat.title} (ID: {target_chat.id})")
-            
-            # 获取机器人信息
-            bot_info = await self.application.bot.get_me()
-            logger.info(f"机器人信息: {bot_info.first_name} (@{bot_info.username})")
-            
-            # 检查机器人在目标频道中的权限
-            try:
-                bot_member = await self.application.bot.get_chat_member(
-                    self.config.target_channel_id, 
-                    bot_info.id
-                )
-                
-                if bot_member.status not in [ChatMember.ADMINISTRATOR, ChatMember.MEMBER]:
-                    logger.warning(f"机器人在目标频道 {self.config.target_channel_id} 中权限不足")
-                    return False
-            except TelegramError as e:
-                logger.warning(f"无法检查机器人在目标频道的权限: {e}")
-                # 继续运行，让机器人尝试发送消息来测试权限
-                
-            return True
-            
-        except TelegramError as e:
-            logger.error(f"检查权限时出错: {e}")
-            return False
     
     async def startup_callback(self, application):
         """启动回调函数"""
         try:
-            # 检查权限
-            await self.check_bot_permissions()
+            # 获取机器人信息
+            bot_info = await application.bot.get_me()
+            logger.info(f"机器人信息: {bot_info.first_name} (@{bot_info.username})")
+            logger.info("机器人启动完成，开始监听消息...")
         except Exception as e:
-            logger.error(f"启动时检查权限失败: {e}")
+            logger.error(f"启动时获取机器人信息失败: {e}")
     
     async def run(self):
         """运行机器人"""
