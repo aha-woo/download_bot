@@ -114,11 +114,25 @@ class TelegramMediaBot:
             
             # 获取源频道的历史消息
             messages = []
-            async for message in context.bot.get_chat_history(
-                chat_id=self.config.source_channel_id, 
-                limit=100  # 获取最近100条消息作为候选
-            ):
-                messages.append(message)
+            # 使用正确的方法获取历史消息
+            try:
+                # 尝试获取聊天历史
+                chat_history = await context.bot.get_chat_history(
+                    chat_id=self.config.source_channel_id, 
+                    limit=100
+                )
+                async for message in chat_history:
+                    messages.append(message)
+            except AttributeError:
+                # 如果 get_chat_history 不存在，使用备用方法
+                # 通过获取聊天信息来验证频道存在
+                try:
+                    chat = await context.bot.get_chat(self.config.source_channel_id)
+                    await update.message.reply_text(f"❌ 当前版本不支持获取历史消息功能\n频道: {chat.title}")
+                    return
+                except Exception as e:
+                    await update.message.reply_text(f"❌ 无法访问源频道: {str(e)}")
+                    return
             
             if not messages:
                 await update.message.reply_text("❌ 源频道没有找到历史消息")
@@ -213,19 +227,24 @@ class TelegramMediaBot:
         await update.message.reply_text(f"🔍 正在搜索包含关键词 '{keyword}' 的消息...")
         
         matched_messages = []
-        async for message in context.bot.get_chat_history(
-            chat_id=self.config.source_channel_id, 
-            limit=100
-        ):
-            # 检查消息文本或说明文字是否包含关键词
-            text_content = ""
-            if message.text:
-                text_content += message.text
-            if message.caption:
-                text_content += message.caption
-            
-            if keyword.lower() in text_content.lower():
-                matched_messages.append(message)
+        try:
+            chat_history = await context.bot.get_chat_history(
+                chat_id=self.config.source_channel_id, 
+                limit=100
+            )
+            async for message in chat_history:
+                # 检查消息文本或说明文字是否包含关键词
+                text_content = ""
+                if message.text:
+                    text_content += message.text
+                if message.caption:
+                    text_content += message.caption
+                
+                if keyword.lower() in text_content.lower():
+                    matched_messages.append(message)
+        except AttributeError:
+            await update.message.reply_text("❌ 当前版本不支持获取历史消息功能")
+            return
         
         if not matched_messages:
             await update.message.reply_text(f"❌ 没有找到包含关键词 '{keyword}' 的消息")
@@ -277,14 +296,19 @@ class TelegramMediaBot:
         await update.message.reply_text(f"🔍 正在搜索 {msg_type} 类型的消息...")
         
         matched_messages = []
-        async for message in context.bot.get_chat_history(
-            chat_id=self.config.source_channel_id, 
-            limit=100
-        ):
-            if msg_type == 'text' and message.text and not message.photo and not message.video and not message.document:
-                matched_messages.append(message)
-            elif msg_type != 'text' and getattr(message, msg_type, None):
-                matched_messages.append(message)
+        try:
+            chat_history = await context.bot.get_chat_history(
+                chat_id=self.config.source_channel_id, 
+                limit=100
+            )
+            async for message in chat_history:
+                if msg_type == 'text' and message.text and not message.photo and not message.video and not message.document:
+                    matched_messages.append(message)
+                elif msg_type != 'text' and getattr(message, msg_type, None):
+                    matched_messages.append(message)
+        except AttributeError:
+            await update.message.reply_text("❌ 当前版本不支持获取历史消息功能")
+            return
         
         if not matched_messages:
             await update.message.reply_text(f"❌ 没有找到 {msg_type} 类型的消息")
@@ -324,11 +348,16 @@ class TelegramMediaBot:
         await update.message.reply_text(f"🔍 正在获取最近 {count} 条消息...")
         
         recent_messages = []
-        async for message in context.bot.get_chat_history(
-            chat_id=self.config.source_channel_id, 
-            limit=count
-        ):
-            recent_messages.append(message)
+        try:
+            chat_history = await context.bot.get_chat_history(
+                chat_id=self.config.source_channel_id, 
+                limit=count
+            )
+            async for message in chat_history:
+                recent_messages.append(message)
+        except AttributeError:
+            await update.message.reply_text("❌ 当前版本不支持获取历史消息功能")
+            return
         
         if not recent_messages:
             await update.message.reply_text("❌ 没有找到历史消息")
@@ -368,8 +397,27 @@ class TelegramMediaBot:
             logger.warning("收到没有消息内容的更新")
             return
         
+        # 调试信息：记录收到的消息
+        logger.info(f"收到消息 - 频道ID: {message.chat_id}, 消息ID: {message.message_id}")
+        logger.info(f"配置的源频道ID: {self.config.source_channel_id}")
+        
         # 只处理来自源频道的消息
-        if str(message.chat_id) != self.config.source_channel_id.lstrip('@-'):
+        # 处理不同的频道ID格式
+        source_channel_id = self.config.source_channel_id.lstrip('@-')
+        message_chat_id = str(message.chat_id)
+        
+        # 如果配置的频道ID以@开头，需要获取实际的数字ID
+        if self.config.source_channel_id.startswith('@'):
+            try:
+                chat = await context.bot.get_chat(self.config.source_channel_id)
+                source_channel_id = str(chat.id)
+                logger.info(f"解析的源频道数字ID: {source_channel_id}")
+            except Exception as e:
+                logger.error(f"无法获取频道信息: {e}")
+                return
+        
+        if message_chat_id != source_channel_id:
+            logger.info(f"消息不是来自源频道，跳过处理。消息频道: {message_chat_id}, 源频道: {source_channel_id}")
             return
             
         try:
