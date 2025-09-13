@@ -139,85 +139,53 @@ class TelegramMediaBot:
     
     async def run(self):
         """运行机器人"""
-        try:
-            # 创建应用
-            self.application = Application.builder().token(self.config.bot_token).build()
-            
-            # 设置处理器
-            self.setup_handlers()
-            
-            # 添加启动回调
-            self.application.post_init = self.startup_callback
-            
-            # 创建下载目录
-            download_path = Path(self.config.download_path)
-            download_path.mkdir(exist_ok=True)
-            
-            logger.info("🤖 Telegram媒体转发机器人启动成功！")
-            logger.info(f"源频道: {self.config.source_channel_id}")
-            logger.info(f"目标频道: {self.config.target_channel_id}")
-            logger.info(f"下载目录: {download_path.absolute()}")
-            
-            # 启动机器人
-            await self.application.run_polling(
-                allowed_updates=Update.ALL_TYPES,
-                drop_pending_updates=True
-            )
-            
-        except Exception as e:
-            logger.error(f"机器人运行出错: {e}")
-            # 确保应用被正确关闭
-            if self.application:
-                try:
-                    await self.application.shutdown()
-                except Exception as shutdown_error:
-                    logger.error(f"关闭应用时出错: {shutdown_error}")
-            raise
+        # 创建应用
+        self.application = Application.builder().token(self.config.bot_token).build()
+        
+        # 设置处理器
+        self.setup_handlers()
+        
+        # 添加启动回调
+        self.application.post_init = self.startup_callback
+        
+        # 创建下载目录
+        download_path = Path(self.config.download_path)
+        download_path.mkdir(exist_ok=True)
+        
+        logger.info("🤖 Telegram媒体转发机器人启动成功！")
+        logger.info(f"源频道: {self.config.source_channel_id}")
+        logger.info(f"目标频道: {self.config.target_channel_id}")
+        logger.info(f"下载目录: {download_path.absolute()}")
+        
+        # 启动机器人
+        await self.application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True
+        )
 
 
 async def main():
     """主函数"""
     bot = TelegramMediaBot()
-    
-    # 设置信号处理器
-    def signal_handler(signum, frame):
-        logger.info(f"收到信号 {signum}，正在关闭机器人...")
-        if bot.application:
-            asyncio.create_task(bot.application.stop())
-    
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    try:
-        await bot.run()
-    except asyncio.CancelledError:
-        logger.info("机器人被取消")
-    except Exception as e:
-        logger.error(f"机器人运行出错: {e}")
-        raise
+    await bot.run()
 
 
 if __name__ == "__main__":
     try:
-        # 使用更兼容的事件循环处理方式
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # 使用兼容 PM2 的事件循环处理方式
         try:
-            loop.run_until_complete(main())
-        except KeyboardInterrupt:
-            logger.info("机器人已停止")
-        finally:
-            # 清理事件循环
-            try:
-                pending = asyncio.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            except Exception as e:
-                logger.error(f"清理任务时出错: {e}")
-            finally:
-                loop.close()
+            # 尝试获取现有的事件循环
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            # 如果没有事件循环，创建一个新的
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        # 运行主函数
+        loop.run_until_complete(main())
+        
+    except KeyboardInterrupt:
+        logger.info("机器人已停止")
     except Exception as e:
         logger.error(f"程序异常退出: {e}")
         sys.exit(1)
