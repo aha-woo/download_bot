@@ -624,11 +624,15 @@ class TelegramMediaBot:
             all_downloaded_files = []
             total_messages = len(messages)
             
+            logger.info(f"📥 开始下载媒体组 {media_group_id} 的所有文件...")
             for i, message in enumerate(messages, 1):
                 if self.bot_handler.has_media(message):
-                    logger.info(f"下载媒体组 {media_group_id} 第 {i}/{total_messages} 个文件")
+                    logger.info(f"📥 下载媒体组 {media_group_id} 第 {i}/{total_messages} 个文件")
                     downloaded_files = await self.media_downloader.download_media(message, context.bot)
                     all_downloaded_files.extend(downloaded_files)
+                    logger.info(f"✅ 完成下载第 {i}/{total_messages} 个文件，共获得 {len(downloaded_files)} 个文件")
+            
+            logger.info(f"📥 媒体组 {media_group_id} 所有文件下载完成，共 {len(all_downloaded_files)} 个文件")
             
             # 取消进度监控定时器
             if group_data['timer']:
@@ -640,15 +644,26 @@ class TelegramMediaBot:
             if all_downloaded_files:
                 # 使用第一条消息作为主消息，包含所有下载的文件
                 main_message = messages[0]
-                await self.bot_handler.forward_message(main_message, all_downloaded_files, context.bot)
+                logger.info(f"📤 开始转发媒体组 {media_group_id} 到目标频道...")
                 
-                download_time = asyncio.get_event_loop().time() - group_data['download_start_time']
-                logger.info(f"成功转发媒体组 {media_group_id} 到目标频道，包含 {len(all_downloaded_files)} 个文件，耗时 {download_time:.1f} 秒")
-                
-                # 自动清理已成功发布的文件
-                await self._cleanup_files(all_downloaded_files)
+                try:
+                    await self.bot_handler.forward_message(main_message, all_downloaded_files, context.bot)
+                    
+                    download_time = asyncio.get_event_loop().time() - group_data['download_start_time']
+                    logger.info(f"🎉 成功转发媒体组 {media_group_id} 到目标频道！包含 {len(all_downloaded_files)} 个文件，总耗时 {download_time:.1f} 秒")
+                    
+                    # 自动清理已成功发布的文件
+                    logger.info(f"🧹 开始清理媒体组 {media_group_id} 的本地文件...")
+                    await self._cleanup_files(all_downloaded_files)
+                    logger.info(f"🧹 媒体组 {media_group_id} 文件清理完成")
+                    
+                except Exception as e:
+                    logger.error(f"❌ 转发媒体组 {media_group_id} 失败: {e}")
+                    logger.info(f"🧹 转发失败，清理本地文件...")
+                    await self._cleanup_files(all_downloaded_files)
+                    raise
             else:
-                logger.warning(f"媒体组 {media_group_id} 没有可下载的媒体文件")
+                logger.warning(f"⚠️ 媒体组 {media_group_id} 没有可下载的媒体文件")
             
             # 清理媒体组缓存
             del self.media_groups[media_group_id]

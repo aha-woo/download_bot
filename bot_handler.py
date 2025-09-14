@@ -173,17 +173,21 @@ class TelegramBotHandler:
             media_type = self.get_media_type(message)
             
             with open(file_path, 'rb') as file:
-                if media_type == 'photo':
-                    media = InputMediaPhoto(media=file)
-                elif media_type == 'video':
-                    media = InputMediaVideo(media=file)
-                else:
-                    media = InputMediaDocument(media=file)
-                
                 # 只在第一个媒体上添加说明文字
                 if i == 0 and caption:
-                    media.caption = caption
-                    media.parse_mode = 'HTML'
+                    if media_type == 'photo':
+                        media = InputMediaPhoto(media=file, caption=caption, parse_mode='HTML')
+                    elif media_type == 'video':
+                        media = InputMediaVideo(media=file, caption=caption, parse_mode='HTML')
+                    else:
+                        media = InputMediaDocument(media=file, caption=caption, parse_mode='HTML')
+                else:
+                    if media_type == 'photo':
+                        media = InputMediaPhoto(media=file)
+                    elif media_type == 'video':
+                        media = InputMediaVideo(media=file)
+                    else:
+                        media = InputMediaDocument(media=file)
                 
                 media_list.append(media)
         
