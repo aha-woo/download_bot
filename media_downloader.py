@@ -24,8 +24,8 @@ class MediaDownloader:
         self.download_path = Path(config.download_path)
         self.download_path.mkdir(exist_ok=True)
     
-    async def download_media(self, message: Message, bot=None) -> List[Path]:
-        """下载消息中的媒体文件"""
+    async def download_media(self, message: Message, bot=None) -> List[dict]:
+        """下载消息中的媒体文件，返回文件路径和类型信息"""
         downloaded_files = []
         
         try:
@@ -56,7 +56,10 @@ class MediaDownloader:
                 await self._download_file(message, media_info, file_path, bot)
                 
                 if file_path.exists() and file_path.stat().st_size > 0:
-                    downloaded_files.append(file_path)
+                    downloaded_files.append({
+                        'path': file_path,
+                        'type': media_info['media_type']
+                    })
                     logger.info(f"成功下载文件: {file_path}")
                 else:
                     logger.error(f"文件下载失败或文件为空: {file_path}")

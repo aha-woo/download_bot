@@ -54,14 +54,14 @@ class TelegramBotHandler:
         return None
     
     async def forward_text_message(self, message: Message, bot=None):
-        """转发纯文本消息"""
+        """发送纯文本消息（作为原创内容）"""
         try:
             # 获取bot实例
             bot_instance = bot or getattr(message, 'bot', None)
             if not bot_instance:
                 raise ValueError("无法获取bot实例")
             
-            # 构建转发消息的文本
+            # 构建消息文本
             forward_text = self._build_forward_text(message)
             
             # 发送到目标频道
@@ -78,15 +78,15 @@ class TelegramBotHandler:
             logger.error(f"转发文本消息失败: {e}")
             raise
     
-    async def forward_message(self, message: Message, downloaded_files: List[Path], bot=None):
-        """转发包含媒体的消息"""
+    async def forward_message(self, message: Message, downloaded_files: List[dict], bot=None):
+        """发送包含媒体的消息（作为原创内容）"""
         try:
             # 获取bot实例
             bot_instance = bot or getattr(message, 'bot', None)
             if not bot_instance:
                 raise ValueError("无法获取bot实例")
             
-            # 构建转发消息的文本
+            # 构建消息文本
             forward_text = self._build_forward_text(message)
             
             # 根据媒体类型和数量选择转发方式
@@ -105,9 +105,10 @@ class TelegramBotHandler:
             logger.error(f"转发媒体消息失败: {e}")
             raise
     
-    async def _send_single_media(self, message: Message, file_path: Path, caption: str, bot):
+    async def _send_single_media(self, message: Message, file_info: dict, caption: str, bot):
         """发送单个媒体文件"""
-        media_type = self.get_media_type(message)
+        file_path = file_info['path']
+        media_type = file_info['type']
         
         with open(file_path, 'rb') as file:
             if media_type == 'photo':
@@ -165,12 +166,13 @@ class TelegramBotHandler:
                     sticker=file
                 )
     
-    async def _send_media_group(self, message: Message, file_paths: List[Path], caption: str, bot):
+    async def _send_media_group(self, message: Message, file_infos: List[dict], caption: str, bot):
         """发送媒体组"""
         media_list = []
         
-        for i, file_path in enumerate(file_paths):
-            media_type = self.get_media_type(message)
+        for i, file_info in enumerate(file_infos):
+            file_path = file_info['path']
+            media_type = file_info['type']
             
             with open(file_path, 'rb') as file:
                 # 只在第一个媒体上添加说明文字
@@ -198,7 +200,7 @@ class TelegramBotHandler:
         )
     
     def _build_forward_text(self, message: Message) -> str:
-        """构建转发消息的文本"""
+        """构建消息文本（不显示转发信息）"""
         text_parts = []
         
         # 添加原始消息文本
@@ -207,14 +209,9 @@ class TelegramBotHandler:
         elif message.caption:
             text_parts.append(message.caption)
         
-        # 添加转发信息
-        forward_info = f"\n\n📤 转发自: {message.chat.title or '未知频道'}"
-        if message.from_user:
-            forward_info += f" (由 @{message.from_user.username or message.from_user.first_name} 发布)"
+        # 不再添加转发信息，让消息看起来像原创内容
         
-        text_parts.append(forward_info)
-        
-        return '\n'.join(text_parts)
+        return '\n'.join(text_parts) if text_parts else ""
     
     def _escape_html(self, text: str) -> str:
         """转义HTML特殊字符"""

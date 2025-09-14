@@ -674,16 +674,23 @@ class TelegramMediaBot:
             if media_group_id in self.media_groups:
                 del self.media_groups[media_group_id]
     
-    async def _cleanup_files(self, file_paths: list):
+    async def _cleanup_files(self, file_infos: list):
         """清理已成功发布的文件"""
         import os
-        for file_path in file_paths:
+        for file_info in file_infos:
             try:
+                # 处理新的文件格式 {'path': Path, 'type': str}
+                if isinstance(file_info, dict):
+                    file_path = file_info['path']
+                else:
+                    # 向后兼容旧格式
+                    file_path = file_info
+                    
                 if os.path.exists(file_path):
                     os.remove(file_path)
                     logger.info(f"已清理文件: {file_path}")
             except Exception as e:
-                logger.error(f"清理文件 {file_path} 失败: {e}")
+                logger.error(f"清理文件 {file_info} 失败: {e}")
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """错误处理"""
