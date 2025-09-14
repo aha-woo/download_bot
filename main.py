@@ -42,6 +42,13 @@ class TelegramMediaBot:
         self.media_downloader = MediaDownloader(self.config)
         self.application = None
         
+        # 媒体组缓存
+        self.media_groups = {}  # {media_group_id: {'messages': [], 'timer': asyncio.Task, 'last_message_time': float, 'status': str, 'download_start_time': float}}
+        self.media_group_timeout = 3  # 秒 - 等待更多消息的时间
+        self.media_group_max_wait = 60  # 秒 - 等待新消息的最大时间
+        self.download_timeout = 3600  # 秒 - 下载超时时间（1小时）
+        self.download_progress_check_interval = 60  # 秒 - 下载进度检查间隔（1分钟）
+        
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """处理 /start 命令"""
         await update.message.reply_text(
@@ -154,6 +161,9 @@ class TelegramMediaBot:
                             await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                             success_count += 1
                             logger.info(f"成功转发历史消息 {message.message_id} 到目标频道")
+                            
+                            # 自动清理已成功发布的文件
+                            await self._cleanup_files(downloaded_files)
                         else:
                             logger.warning(f"历史消息 {message.message_id} 没有可下载的媒体文件")
                     else:
@@ -269,6 +279,9 @@ class TelegramMediaBot:
                     if downloaded_files:
                         await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                         success_count += 1
+                        
+                        # 自动清理已成功发布的文件
+                        await self._cleanup_files(downloaded_files)
                 else:
                     await self.bot_handler.forward_text_message(message, context.bot)
                     success_count += 1
@@ -339,6 +352,9 @@ class TelegramMediaBot:
                     if downloaded_files:
                         await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                         success_count += 1
+                        
+                        # 自动清理已成功发布的文件
+                        await self._cleanup_files(downloaded_files)
                 else:
                     await self.bot_handler.forward_text_message(message, context.bot)
                     success_count += 1
@@ -389,6 +405,9 @@ class TelegramMediaBot:
                     if downloaded_files:
                         await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                         success_count += 1
+                        
+                        # 自动清理已成功发布的文件
+                        await self._cleanup_files(downloaded_files)
                 else:
                     await self.bot_handler.forward_text_message(message, context.bot)
                     success_count += 1
@@ -457,24 +476,199 @@ class TelegramMediaBot:
         try:
             logger.info(f"收到来自源频道的消息: {message.message_id}")
             
-            # 检查消息是否包含媒体
-            if self.bot_handler.has_media(message):
-                # 下载媒体文件
-                downloaded_files = await self.media_downloader.download_media(message, context.bot)
-                
-                if downloaded_files:
-                    # 转发消息到目标频道
-                    await self.bot_handler.forward_message(message, downloaded_files, context.bot)
-                    logger.info(f"成功转发消息 {message.message_id} 到目标频道")
-                else:
-                    logger.warning(f"消息 {message.message_id} 没有可下载的媒体文件")
+            # 检查是否是媒体组消息
+            if message.media_group_id:
+                logger.info(f"消息 {message.message_id} 属于媒体组: {message.media_group_id}")
+                await self._handle_media_group_message(message, context)
             else:
-                # 转发纯文本消息
-                await self.bot_handler.forward_text_message(message, context.bot)
-                logger.info(f"成功转发文本消息 {message.message_id} 到目标频道")
+                # 处理单独的消息
+                await self._handle_single_message(message, context)
                 
         except Exception as e:
             logger.error(f"处理消息 {message.message_id} 时出错: {e}")
+    
+    async def _handle_single_message(self, message: Message, context: ContextTypes.DEFAULT_TYPE):
+        """处理单独的消息"""
+        # 添加随机延迟（1-10秒）
+        import random
+        delay = random.uniform(1, 10)
+        logger.info(f"消息 {message.message_id} 将在 {delay:.1f} 秒后发布")
+        await asyncio.sleep(delay)
+        
+        # 检查消息是否包含媒体
+        if self.bot_handler.has_media(message):
+            # 下载媒体文件
+            downloaded_files = await self.media_downloader.download_media(message, context.bot)
+            
+            if downloaded_files:
+                # 转发消息到目标频道
+                await self.bot_handler.forward_message(message, downloaded_files, context.bot)
+                logger.info(f"成功转发消息 {message.message_id} 到目标频道")
+                
+                # 自动清理已成功发布的文件
+                await self._cleanup_files(downloaded_files)
+            else:
+                logger.warning(f"消息 {message.message_id} 没有可下载的媒体文件")
+        else:
+            # 转发纯文本消息
+            await self.bot_handler.forward_text_message(message, context.bot)
+            logger.info(f"成功转发文本消息 {message.message_id} 到目标频道")
+    
+    async def _handle_media_group_message(self, message: Message, context: ContextTypes.DEFAULT_TYPE):
+        """处理媒体组消息"""
+        media_group_id = message.media_group_id
+        current_time = asyncio.get_event_loop().time()
+        
+        # 如果媒体组不存在，创建新的
+        if media_group_id not in self.media_groups:
+            self.media_groups[media_group_id] = {
+                'messages': [],
+                'timer': None,
+                'last_message_time': current_time,
+                'start_time': current_time,
+                'status': 'collecting',  # collecting, downloading, completed
+                'download_start_time': None
+            }
+        
+        # 添加消息到媒体组
+        self.media_groups[media_group_id]['messages'].append(message)
+        self.media_groups[media_group_id]['last_message_time'] = current_time
+        logger.info(f"媒体组 {media_group_id} 现在有 {len(self.media_groups[media_group_id]['messages'])} 条消息")
+        
+        # 取消之前的定时器
+        if self.media_groups[media_group_id]['timer']:
+            self.media_groups[media_group_id]['timer'].cancel()
+        
+        # 设置新的定时器
+        self.media_groups[media_group_id]['timer'] = asyncio.create_task(
+            self._process_media_group_after_timeout(media_group_id, context)
+        )
+    
+    async def _process_media_group_after_timeout(self, media_group_id: str, context: ContextTypes.DEFAULT_TYPE):
+        """智能处理媒体组超时"""
+        try:
+            # 等待超时
+            await asyncio.sleep(self.media_group_timeout)
+            
+            if media_group_id not in self.media_groups:
+                return
+                
+            current_time = asyncio.get_event_loop().time()
+            group_data = self.media_groups[media_group_id]
+            
+            # 状态机处理
+            if group_data['status'] == 'collecting':
+                # 收集阶段：检查是否还有新消息
+                if current_time - group_data['last_message_time'] < self.media_group_timeout:
+                    # 还有新消息，重新设置定时器
+                    group_data['timer'] = asyncio.create_task(
+                        self._process_media_group_after_timeout(media_group_id, context)
+                    )
+                    return
+                elif current_time - group_data['start_time'] > self.media_group_max_wait:
+                    # 超过最大等待时间，强制开始下载
+                    logger.warning(f"媒体组 {media_group_id} 等待新消息超时，开始下载")
+                    await self._start_media_group_download(media_group_id, context)
+                else:
+                    # 开始下载
+                    await self._start_media_group_download(media_group_id, context)
+                    
+            elif group_data['status'] == 'downloading':
+                # 下载阶段：检查下载进度
+                download_time = current_time - group_data['download_start_time']
+                if download_time > self.download_timeout:
+                    logger.error(f"媒体组 {media_group_id} 下载超时（{download_time:.1f}秒），放弃处理")
+                    del self.media_groups[media_group_id]
+                else:
+                    # 继续等待下载完成
+                    logger.info(f"媒体组 {media_group_id} 正在下载中，已用时 {download_time:.1f} 秒")
+                    group_data['timer'] = asyncio.create_task(
+                        self._process_media_group_after_timeout(media_group_id, context)
+                    )
+                
+        except asyncio.CancelledError:
+            logger.info(f"媒体组 {media_group_id} 的处理被取消")
+        except Exception as e:
+            logger.error(f"处理媒体组 {media_group_id} 时出错: {e}")
+            # 清理媒体组缓存
+            if media_group_id in self.media_groups:
+                del self.media_groups[media_group_id]
+    
+    async def _start_media_group_download(self, media_group_id: str, context: ContextTypes.DEFAULT_TYPE):
+        """开始媒体组下载"""
+        try:
+            if media_group_id not in self.media_groups:
+                return
+                
+            group_data = self.media_groups[media_group_id]
+            messages = group_data['messages']
+            
+            # 更新状态为下载中
+            group_data['status'] = 'downloading'
+            group_data['download_start_time'] = asyncio.get_event_loop().time()
+            
+            logger.info(f"开始下载媒体组 {media_group_id}，包含 {len(messages)} 条消息")
+            
+            # 添加随机延迟（1-10秒）
+            import random
+            delay = random.uniform(1, 10)
+            logger.info(f"媒体组 {media_group_id} 将在 {delay:.1f} 秒后开始下载")
+            await asyncio.sleep(delay)
+            
+            # 设置下载进度监控
+            group_data['timer'] = asyncio.create_task(
+                self._process_media_group_after_timeout(media_group_id, context)
+            )
+            
+            # 下载所有媒体文件
+            all_downloaded_files = []
+            total_messages = len(messages)
+            
+            for i, message in enumerate(messages, 1):
+                if self.bot_handler.has_media(message):
+                    logger.info(f"下载媒体组 {media_group_id} 第 {i}/{total_messages} 个文件")
+                    downloaded_files = await self.media_downloader.download_media(message, context.bot)
+                    all_downloaded_files.extend(downloaded_files)
+            
+            # 取消进度监控定时器
+            if group_data['timer']:
+                group_data['timer'].cancel()
+            
+            # 更新状态为完成
+            group_data['status'] = 'completed'
+            
+            if all_downloaded_files:
+                # 使用第一条消息作为主消息，包含所有下载的文件
+                main_message = messages[0]
+                await self.bot_handler.forward_message(main_message, all_downloaded_files, context.bot)
+                
+                download_time = asyncio.get_event_loop().time() - group_data['download_start_time']
+                logger.info(f"成功转发媒体组 {media_group_id} 到目标频道，包含 {len(all_downloaded_files)} 个文件，耗时 {download_time:.1f} 秒")
+                
+                # 自动清理已成功发布的文件
+                await self._cleanup_files(all_downloaded_files)
+            else:
+                logger.warning(f"媒体组 {media_group_id} 没有可下载的媒体文件")
+            
+            # 清理媒体组缓存
+            del self.media_groups[media_group_id]
+            
+        except Exception as e:
+            logger.error(f"下载媒体组 {media_group_id} 时出错: {e}")
+            # 清理媒体组缓存
+            if media_group_id in self.media_groups:
+                del self.media_groups[media_group_id]
+    
+    async def _cleanup_files(self, file_paths: list):
+        """清理已成功发布的文件"""
+        import os
+        for file_path in file_paths:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    logger.info(f"已清理文件: {file_path}")
+            except Exception as e:
+                logger.error(f"清理文件 {file_path} 失败: {e}")
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """错误处理"""
