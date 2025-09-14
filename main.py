@@ -151,14 +151,14 @@ class TelegramMediaBot:
                         
                         if downloaded_files:
                             # 转发消息到目标频道
-                            await self.bot_handler.forward_message(message, downloaded_files)
+                            await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                             success_count += 1
                             logger.info(f"成功转发历史消息 {message.message_id} 到目标频道")
                         else:
                             logger.warning(f"历史消息 {message.message_id} 没有可下载的媒体文件")
                     else:
                         # 转发纯文本消息
-                        await self.bot_handler.forward_text_message(message)
+                        await self.bot_handler.forward_text_message(message, context.bot)
                         success_count += 1
                         logger.info(f"成功转发历史文本消息 {message.message_id} 到目标频道")
                         
@@ -267,10 +267,10 @@ class TelegramMediaBot:
                 if self.bot_handler.has_media(message):
                     downloaded_files = await self.media_downloader.download_media(message, context.bot)
                     if downloaded_files:
-                        await self.bot_handler.forward_message(message, downloaded_files)
+                        await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                         success_count += 1
                 else:
-                    await self.bot_handler.forward_text_message(message)
+                    await self.bot_handler.forward_text_message(message, context.bot)
                     success_count += 1
                     
             except Exception as e:
@@ -337,10 +337,10 @@ class TelegramMediaBot:
                 if self.bot_handler.has_media(message):
                     downloaded_files = await self.media_downloader.download_media(message, context.bot)
                     if downloaded_files:
-                        await self.bot_handler.forward_message(message, downloaded_files)
+                        await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                         success_count += 1
                 else:
-                    await self.bot_handler.forward_text_message(message)
+                    await self.bot_handler.forward_text_message(message, context.bot)
                     success_count += 1
                     
             except Exception as e:
@@ -387,10 +387,10 @@ class TelegramMediaBot:
                 if self.bot_handler.has_media(message):
                     downloaded_files = await self.media_downloader.download_media(message, context.bot)
                     if downloaded_files:
-                        await self.bot_handler.forward_message(message, downloaded_files)
+                        await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                         success_count += 1
                 else:
-                    await self.bot_handler.forward_text_message(message)
+                    await self.bot_handler.forward_text_message(message, context.bot)
                     success_count += 1
                     
             except Exception as e:
@@ -464,13 +464,13 @@ class TelegramMediaBot:
                 
                 if downloaded_files:
                     # 转发消息到目标频道
-                    await self.bot_handler.forward_message(message, downloaded_files)
+                    await self.bot_handler.forward_message(message, downloaded_files, context.bot)
                     logger.info(f"成功转发消息 {message.message_id} 到目标频道")
                 else:
                     logger.warning(f"消息 {message.message_id} 没有可下载的媒体文件")
             else:
                 # 转发纯文本消息
-                await self.bot_handler.forward_text_message(message)
+                await self.bot_handler.forward_text_message(message, context.bot)
                 logger.info(f"成功转发文本消息 {message.message_id} 到目标频道")
                 
         except Exception as e:

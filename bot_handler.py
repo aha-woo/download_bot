@@ -53,14 +53,19 @@ class TelegramBotHandler:
             return 'sticker'
         return None
     
-    async def forward_text_message(self, message: Message):
+    async def forward_text_message(self, message: Message, bot=None):
         """转发纯文本消息"""
         try:
+            # 获取bot实例
+            bot_instance = bot or getattr(message, 'bot', None)
+            if not bot_instance:
+                raise ValueError("无法获取bot实例")
+            
             # 构建转发消息的文本
             forward_text = self._build_forward_text(message)
             
             # 发送到目标频道
-            await message.bot.send_message(
+            await bot_instance.send_message(
                 chat_id=self.config.target_channel_id,
                 text=forward_text,
                 parse_mode='HTML',
@@ -73,9 +78,14 @@ class TelegramBotHandler:
             logger.error(f"转发文本消息失败: {e}")
             raise
     
-    async def forward_message(self, message: Message, downloaded_files: List[Path]):
+    async def forward_message(self, message: Message, downloaded_files: List[Path], bot=None):
         """转发包含媒体的消息"""
         try:
+            # 获取bot实例
+            bot_instance = bot or getattr(message, 'bot', None)
+            if not bot_instance:
+                raise ValueError("无法获取bot实例")
+            
             # 构建转发消息的文本
             forward_text = self._build_forward_text(message)
             
@@ -84,10 +94,10 @@ class TelegramBotHandler:
             
             if len(downloaded_files) == 1:
                 # 单个媒体文件
-                await self._send_single_media(message, downloaded_files[0], forward_text)
+                await self._send_single_media(message, downloaded_files[0], forward_text, bot_instance)
             else:
                 # 多个媒体文件
-                await self._send_media_group(message, downloaded_files, forward_text)
+                await self._send_media_group(message, downloaded_files, forward_text, bot_instance)
             
             logger.info(f"成功转发媒体消息到目标频道")
             
@@ -95,67 +105,67 @@ class TelegramBotHandler:
             logger.error(f"转发媒体消息失败: {e}")
             raise
     
-    async def _send_single_media(self, message: Message, file_path: Path, caption: str):
+    async def _send_single_media(self, message: Message, file_path: Path, caption: str, bot):
         """发送单个媒体文件"""
         media_type = self.get_media_type(message)
         
         with open(file_path, 'rb') as file:
             if media_type == 'photo':
-                await message.bot.send_photo(
+                await bot.send_photo(
                     chat_id=self.config.target_channel_id,
                     photo=file,
                     caption=caption,
                     parse_mode='HTML'
                 )
             elif media_type == 'video':
-                await message.bot.send_video(
+                await bot.send_video(
                     chat_id=self.config.target_channel_id,
                     video=file,
                     caption=caption,
                     parse_mode='HTML'
                 )
             elif media_type == 'document':
-                await message.bot.send_document(
+                await bot.send_document(
                     chat_id=self.config.target_channel_id,
                     document=file,
                     caption=caption,
                     parse_mode='HTML'
                 )
             elif media_type == 'audio':
-                await message.bot.send_audio(
+                await bot.send_audio(
                     chat_id=self.config.target_channel_id,
                     audio=file,
                     caption=caption,
                     parse_mode='HTML'
                 )
             elif media_type == 'voice':
-                await message.bot.send_voice(
+                await bot.send_voice(
                     chat_id=self.config.target_channel_id,
                     voice=file,
                     caption=caption,
                     parse_mode='HTML'
                 )
             elif media_type == 'video_note':
-                await message.bot.send_video_note(
+                await bot.send_video_note(
                     chat_id=self.config.target_channel_id,
                     video_note=file,
                     caption=caption,
                     parse_mode='HTML'
                 )
             elif media_type == 'animation':
-                await message.bot.send_animation(
+                await bot.send_animation(
                     chat_id=self.config.target_channel_id,
                     animation=file,
                     caption=caption,
                     parse_mode='HTML'
                 )
             elif media_type == 'sticker':
-                await message.bot.send_sticker(
+                await bot.send_sticker(
                     chat_id=self.config.target_channel_id,
                     sticker=file
                 )
     
-    async def _send_media_group(self, message: Message, file_paths: List[Path], caption: str):
+    async def _send_media_group(self, message: Message, file_paths: List[Path], caption: str, bot):
         """发送媒体组"""
         media_list = []
         
@@ -178,7 +188,7 @@ class TelegramBotHandler:
                 media_list.append(media)
         
         # 发送媒体组
-        await message.bot.send_media_group(
+        await bot.send_media_group(
             chat_id=self.config.target_channel_id,
             media=media_list
         )
