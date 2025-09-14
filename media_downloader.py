@@ -209,25 +209,54 @@ class MediaDownloader:
     
     async def _download_file(self, message: Message, media_info: dict, file_path: Path, bot=None):
         """下载文件"""
+        file_name = media_info.get('file_name', 'unknown')
+        file_size_mb = media_info.get('file_size', 0) / (1024 * 1024)
+        
         try:
             # 获取bot实例
             bot_instance = bot or getattr(message, 'bot', None)
             if not bot_instance:
                 raise ValueError("无法获取bot实例")
             
+            logger.info(f"🔄 开始获取文件信息: {file_name} ({file_size_mb:.1f}MB)")
+            
             # 获取文件对象
             file = await bot_instance.get_file(media_info['file_id'])
+            
+            logger.info(f"✅ 文件信息获取成功，开始下载: {file_name}")
             
             # 下载文件
             await file.download_to_drive(file_path)
             
-            logger.info(f"文件下载完成: {file_path}")
+            logger.info(f"✅ 文件下载完成: {file_path}")
             
         except TelegramError as e:
-            logger.error(f"下载文件失败: {e}")
+            # 详细记录Telegram API错误
+            error_code = getattr(e, 'error_code', 'Unknown')
+            error_message = str(e)
+            
+            logger.error(f"❌ Telegram API错误 - 文件: {file_name} ({file_size_mb:.1f}MB)")
+            logger.error(f"   错误代码: {error_code}")
+            logger.error(f"   错误信息: {error_message}")
+            
+            # 特殊处理常见错误
+            if "file is too big" in error_message.lower() or "413" in str(error_code):
+                logger.error(f"   🚫 文件超过Bot API 20MB限制！")
+                logger.info(f"   💡 解决方案: 搭建本地Bot API服务器支持2GB文件")
+            elif "400" in str(error_code):
+                logger.error(f"   🚫 请求错误，可能是文件ID无效或已过期")
+            elif "404" in str(error_code):
+                logger.error(f"   🚫 文件未找到，可能已被删除")
+            elif "429" in str(error_code):
+                logger.error(f"   🚫 请求频率限制，请稍后重试")
+            else:
+                logger.error(f"   🚫 其他API错误")
+            
             raise
+            
         except Exception as e:
-            logger.error(f"下载文件时发生未知错误: {e}")
+            logger.error(f"❌ 下载文件时发生未知错误: {file_name} ({file_size_mb:.1f}MB)")
+            logger.error(f"   错误详情: {type(e).__name__}: {e}")
             raise
     
     def cleanup_old_files(self, max_age_hours: int = 24):

@@ -489,30 +489,46 @@ class TelegramMediaBot:
     
     async def _handle_single_message(self, message: Message, context: ContextTypes.DEFAULT_TYPE):
         """处理单独的消息"""
+        logger.info(f"🔄 开始处理单独消息 {message.message_id}")
+        
         # 添加随机延迟（1-10秒）
         import random
         delay = random.uniform(1, 10)
-        logger.info(f"消息 {message.message_id} 将在 {delay:.1f} 秒后发布")
+        logger.info(f"⏰ 消息 {message.message_id} 将在 {delay:.1f} 秒后发布")
         await asyncio.sleep(delay)
         
         # 检查消息是否包含媒体
         if self.bot_handler.has_media(message):
-            # 下载媒体文件
-            downloaded_files = await self.media_downloader.download_media(message, context.bot)
+            logger.info(f"📥 消息 {message.message_id} 包含媒体，开始下载...")
             
-            if downloaded_files:
-                # 转发消息到目标频道
-                await self.bot_handler.forward_message(message, downloaded_files, context.bot)
-                logger.info(f"成功转发消息 {message.message_id} 到目标频道")
+            # 下载媒体文件
+            try:
+                downloaded_files = await self.media_downloader.download_media(message, context.bot)
                 
-                # 自动清理已成功发布的文件
-                await self._cleanup_files(downloaded_files)
-            else:
-                logger.warning(f"消息 {message.message_id} 没有可下载的媒体文件")
+                if downloaded_files:
+                    logger.info(f"📥 消息 {message.message_id} 下载完成，共 {len(downloaded_files)} 个文件")
+                    logger.info(f"📤 开始转发消息 {message.message_id} 到目标频道...")
+                    
+                    # 转发消息到目标频道
+                    await self.bot_handler.forward_message(message, downloaded_files, context.bot)
+                    logger.info(f"🎉 成功转发消息 {message.message_id} 到目标频道")
+                    
+                    # 自动清理已成功发布的文件
+                    logger.info(f"🧹 开始清理消息 {message.message_id} 的本地文件...")
+                    await self._cleanup_files(downloaded_files)
+                    logger.info(f"🧹 消息 {message.message_id} 文件清理完成")
+                else:
+                    logger.warning(f"⚠️ 消息 {message.message_id} 没有可下载的媒体文件")
+                    logger.info(f"   可能原因: 文件超过大小限制、网络错误或API限制")
+                    
+            except Exception as e:
+                logger.error(f"❌ 消息 {message.message_id} 下载失败: {e}")
+                logger.info(f"   消息将被跳过，不会转发到目标频道")
         else:
+            logger.info(f"📝 消息 {message.message_id} 是纯文本消息")
             # 转发纯文本消息
             await self.bot_handler.forward_text_message(message, context.bot)
-            logger.info(f"成功转发文本消息 {message.message_id} 到目标频道")
+            logger.info(f"🎉 成功转发文本消息 {message.message_id} 到目标频道")
     
     async def _handle_media_group_message(self, message: Message, context: ContextTypes.DEFAULT_TYPE):
         """处理媒体组消息"""
@@ -642,8 +658,14 @@ class TelegramMediaBot:
             group_data['status'] = 'completed'
             
             if all_downloaded_files:
-                # 使用第一条消息作为主消息，包含所有下载的文件
+                # 找到包含文案的消息，如果没有则使用第一条消息
                 main_message = messages[0]
+                for message in messages:
+                    if message.caption or message.text:
+                        main_message = message
+                        logger.info(f"📝 使用消息 {message.message_id} 的文案作为媒体组说明")
+                        break
+                
                 logger.info(f"📤 开始转发媒体组 {media_group_id} 到目标频道...")
                 
                 try:
