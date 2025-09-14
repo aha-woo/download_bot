@@ -43,9 +43,15 @@ class MediaDownloader:
             # 下载所有媒体文件
             for i, media_info in enumerate(media_info_list):
                 # 检查文件大小
+                file_size_mb = media_info['file_size'] / (1024 * 1024)
+                max_size_mb = self.config.max_file_size / (1024 * 1024)
+                
                 if media_info['file_size'] > self.config.max_file_size:
-                    logger.warning(f"文件 {media_info['file_name']} 超过大小限制 ({media_info['file_size']} > {self.config.max_file_size})")
+                    logger.warning(f"⚠️ 文件 {media_info['file_name']} 超过大小限制 ({file_size_mb:.1f}MB > {max_size_mb:.1f}MB)，跳过下载")
                     continue
+                elif media_info['file_size'] > 20 * 1024 * 1024:  # 20MB
+                    logger.warning(f"⚠️ 文件 {media_info['file_name']} 超过Bot API限制 ({file_size_mb:.1f}MB > 20MB)，可能下载失败")
+                    logger.info("💡 建议：搭建本地Bot API服务器以支持大文件下载")
                 
                 # 生成文件名
                 file_name = self._generate_file_name(message, media_info, i)
