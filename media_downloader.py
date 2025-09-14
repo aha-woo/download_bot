@@ -34,30 +34,32 @@ class MediaDownloader:
                 logger.info(f"消息 {message.message_id} 不包含媒体文件")
                 return downloaded_files
             
-            # 获取媒体文件信息
-            media_info = self._get_media_info(message)
-            if not media_info:
+            # 获取所有媒体文件信息
+            media_info_list = self._get_all_media_info(message)
+            if not media_info_list:
                 logger.warning(f"无法获取消息 {message.message_id} 的媒体信息")
                 return downloaded_files
             
-            # 检查文件大小
-            if media_info['file_size'] > self.config.max_file_size:
-                logger.warning(f"文件 {media_info['file_name']} 超过大小限制 ({media_info['file_size']} > {self.config.max_file_size})")
-                return downloaded_files
-            
-            # 生成文件名
-            file_name = self._generate_file_name(message, media_info)
-            file_path = self.download_path / file_name
-            
-            # 下载文件
-            logger.info(f"开始下载文件: {file_name}")
-            await self._download_file(message, media_info, file_path, bot)
-            
-            if file_path.exists() and file_path.stat().st_size > 0:
-                downloaded_files.append(file_path)
-                logger.info(f"成功下载文件: {file_path}")
-            else:
-                logger.error(f"文件下载失败或文件为空: {file_path}")
+            # 下载所有媒体文件
+            for i, media_info in enumerate(media_info_list):
+                # 检查文件大小
+                if media_info['file_size'] > self.config.max_file_size:
+                    logger.warning(f"文件 {media_info['file_name']} 超过大小限制 ({media_info['file_size']} > {self.config.max_file_size})")
+                    continue
+                
+                # 生成文件名
+                file_name = self._generate_file_name(message, media_info, i)
+                file_path = self.download_path / file_name
+                
+                # 下载文件
+                logger.info(f"开始下载文件: {file_name}")
+                await self._download_file(message, media_info, file_path, bot)
+                
+                if file_path.exists() and file_path.stat().st_size > 0:
+                    downloaded_files.append(file_path)
+                    logger.info(f"成功下载文件: {file_path}")
+                else:
+                    logger.error(f"文件下载失败或文件为空: {file_path}")
             
         except Exception as e:
             logger.error(f"下载媒体文件时出错: {e}")
@@ -77,74 +79,77 @@ class MediaDownloader:
             message.sticker
         ])
     
-    def _get_media_info(self, message: Message) -> Optional[dict]:
-        """获取媒体文件信息"""
-        media_info = {}
+    def _get_all_media_info(self, message: Message) -> List[dict]:
+        """获取所有媒体文件信息"""
+        media_info_list = []
         
         if message.photo:
-            # 选择最高分辨率的照片
+            # 对于照片，只选择最高分辨率的一张
             photo = max(message.photo, key=lambda p: p.file_size)
-            media_info.update({
+            media_info_list.append({
                 'file_id': photo.file_id,
                 'file_name': f"photo_{message.message_id}.jpg",
                 'file_size': photo.file_size or 0,
                 'media_type': 'photo'
             })
         elif message.video:
-            media_info.update({
+            media_info_list.append({
                 'file_id': message.video.file_id,
                 'file_name': message.video.file_name or f"video_{message.message_id}.mp4",
                 'file_size': message.video.file_size or 0,
                 'media_type': 'video'
             })
         elif message.document:
-            media_info.update({
+            media_info_list.append({
                 'file_id': message.document.file_id,
                 'file_name': message.document.file_name or f"document_{message.message_id}",
                 'file_size': message.document.file_size or 0,
                 'media_type': 'document'
             })
         elif message.audio:
-            media_info.update({
+            media_info_list.append({
                 'file_id': message.audio.file_id,
                 'file_name': message.audio.file_name or f"audio_{message.message_id}.mp3",
                 'file_size': message.audio.file_size or 0,
                 'media_type': 'audio'
             })
         elif message.voice:
-            media_info.update({
+            media_info_list.append({
                 'file_id': message.voice.file_id,
                 'file_name': f"voice_{message.message_id}.ogg",
                 'file_size': message.voice.file_size or 0,
                 'media_type': 'voice'
             })
         elif message.video_note:
-            media_info.update({
+            media_info_list.append({
                 'file_id': message.video_note.file_id,
                 'file_name': f"video_note_{message.message_id}.mp4",
                 'file_size': message.video_note.file_size or 0,
                 'media_type': 'video_note'
             })
         elif message.animation:
-            media_info.update({
+            media_info_list.append({
                 'file_id': message.animation.file_id,
                 'file_name': message.animation.file_name or f"animation_{message.message_id}.gif",
                 'file_size': message.animation.file_size or 0,
                 'media_type': 'animation'
             })
         elif message.sticker:
-            media_info.update({
+            media_info_list.append({
                 'file_id': message.sticker.file_id,
                 'file_name': f"sticker_{message.message_id}.webp",
                 'file_size': message.sticker.file_size or 0,
                 'media_type': 'sticker'
             })
-        else:
-            return None
         
-        return media_info
+        return media_info_list
     
-    def _generate_file_name(self, message: Message, media_info: dict) -> str:
+    def _get_media_info(self, message: Message) -> Optional[dict]:
+        """获取媒体文件信息（保持向后兼容）"""
+        media_info_list = self._get_all_media_info(message)
+        return media_info_list[0] if media_info_list else None
+    
+    def _generate_file_name(self, message: Message, media_info: dict, index: int = 0) -> str:
         """生成文件名"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         message_id = message.message_id
@@ -157,8 +162,11 @@ class MediaDownloader:
             name = original_name
             ext = self._get_default_extension(media_info['media_type'])
         
-        # 生成新文件名
-        new_name = f"{timestamp}_{message_id}_{name}.{ext}"
+        # 生成新文件名，如果有多个文件则添加索引
+        if index > 0:
+            new_name = f"{timestamp}_{message_id}_{name}_{index}.{ext}"
+        else:
+            new_name = f"{timestamp}_{message_id}_{name}.{ext}"
         
         # 确保文件名安全
         safe_name = self._sanitize_filename(new_name)
