@@ -1,11 +1,12 @@
 #!/bin/bash
 
-# Telegram Bot 部署脚本
+# Telegram User Client 部署脚本
 # 适用于 Ubuntu/Debian VPS
+# 使用 Telethon User API，支持2GB大文件
 
 set -e
 
-echo "🚀 开始部署 Telegram Media Forward Bot..."
+echo "🚀 开始部署 Telegram User Client..."
 
 # 检查是否为root用户
 if [ "$EUID" -eq 0 ]; then
@@ -52,8 +53,9 @@ sudo systemctl daemon-reload
 if [ ! -f .env ]; then
     echo "📝 创建配置文件..."
     cp config.env.example .env
-    echo "⚠️  请编辑 .env 文件，填入你的Bot Token和频道信息"
+    echo "⚠️  请编辑 .env 文件，填入你的API_ID、API_HASH和手机号"
     echo "   配置文件位置: $PROJECT_DIR/.env"
+    echo "   获取API凭据: https://my.telegram.org/apps"
 fi
 
 # 创建下载目录
@@ -67,9 +69,10 @@ echo "✅ 部署完成！"
 echo ""
 echo "📋 接下来的步骤："
 echo "1. 编辑配置文件: nano $PROJECT_DIR/.env"
-echo "2. 启动服务: sudo systemctl start $SERVICE_NAME"
-echo "3. 设置开机自启: sudo systemctl enable $SERVICE_NAME"
-echo "4. 查看日志: sudo journalctl -u $SERVICE_NAME -f"
+echo "2. 首次运行验证: python3 main.py (需要输入验证码)"
+echo "3. 启动服务: sudo systemctl start $SERVICE_NAME"
+echo "4. 设置开机自启: sudo systemctl enable $SERVICE_NAME"
+echo "5. 查看日志: sudo journalctl -u $SERVICE_NAME -f"
 echo ""
 echo "🔧 常用命令："
 echo "  启动服务: sudo systemctl start $SERVICE_NAME"

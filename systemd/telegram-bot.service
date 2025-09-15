@@ -1,5 +1,5 @@
 [Unit]
-Description=Telegram Media Forward Bot
+Description=Telegram User Client (Telethon)
 After=network.target
 
 [Service]
@@ -10,11 +10,13 @@ Environment=PATH=/home/ubuntu/download_bot/venv/bin
 ExecStart=/home/ubuntu/download_bot/venv/bin/python main.py
 Restart=always
 RestartSec=10
+# User API需要保持会话
+RemainAfterExit=no
 
 # 日志配置
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=telegram-bot
+SyslogIdentifier=telegram-user-client
 
 # 安全配置
 NoNewPrivileges=true
