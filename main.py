@@ -16,7 +16,7 @@ import random
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.tl.types import Message
-from telethon.errors import TelegramError
+from telethon.errors import RPCError
 
 from bot_handler import TelegramBotHandler
 from media_downloader import MediaDownloader

@@ -10,7 +10,7 @@ from datetime import datetime
 
 from telethon import TelegramClient
 from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
-from telethon.errors import TelegramError
+from telethon.errors import RPCError
 
 from config import Config
 
@@ -225,7 +225,7 @@ class MediaDownloader:
             
             logger.info(f"✅ 文件下载完成: {file_path}")
             
-        except TelegramError as e:
+        except RPCError as e:
             # 详细记录Telegram API错误
             error_code = getattr(e, 'code', 'Unknown')
             error_message = str(e)

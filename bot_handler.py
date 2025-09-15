@@ -8,7 +8,7 @@ from pathlib import Path
 
 from telethon import TelegramClient
 from telethon.tl.types import Message, MessageMediaPhoto, MessageMediaDocument
-from telethon.errors import TelegramError
+from telethon.errors import RPCError
 
 from config import Config
 
@@ -66,7 +66,7 @@ class TelegramBotHandler:
             
             logger.info(f"成功转发文本消息到目标频道")
             
-        except TelegramError as e:
+        except RPCError as e:
             logger.error(f"转发文本消息失败: {e}")
             raise
     
@@ -86,7 +86,7 @@ class TelegramBotHandler:
             
             logger.info(f"成功转发媒体消息到目标频道")
             
-        except TelegramError as e:
+        except RPCError as e:
             logger.error(f"转发媒体消息失败: {e}")
             raise
     
