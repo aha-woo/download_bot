@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 import random
+from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
@@ -50,6 +51,125 @@ class TelegramUserClient:
         self.media_group_max_wait = 60  # 秒 - 等待新消息的最大时间
         self.download_timeout = 3600  # 秒 - 下载超时时间（1小时）
         self.download_progress_check_interval = 60  # 秒 - 下载进度检查间隔（1分钟）
+        
+        # 随机延迟配置（从配置文件读取）
+        self.random_delay_min = self.config.random_delay_min
+        self.random_delay_max = self.config.random_delay_max
+        self.batch_delay_min = self.config.batch_delay_min
+        self.batch_delay_max = self.config.batch_delay_max
+        
+        # 命令控制
+        self.running = True
+        self.command_loop_task = None
+    
+    async def smart_delay(self, delay_type="normal"):
+        """智能随机延迟 - 避免被检测为机器人"""
+        if delay_type == "normal":
+            delay = random.uniform(self.random_delay_min, self.random_delay_max)
+        elif delay_type == "batch":
+            delay = random.uniform(self.batch_delay_min, self.batch_delay_max)
+        elif delay_type == "short":
+            delay = random.uniform(1, 5)
+        else:
+            delay = random.uniform(2, 8)
+        
+        logger.info(f"⏰ 智能延迟 {delay:.1f} 秒（类型: {delay_type}）")
+        await asyncio.sleep(delay)
+    
+    async def _handle_command_message(self, event):
+        """处理Telegram私聊命令"""
+        try:
+            message_text = event.message.text.strip()
+            sender = await event.get_sender()
+            sender_name = getattr(sender, 'first_name', 'Unknown')
+            
+            logger.info(f"📱 处理来自 {sender_name} 的命令: {message_text}")
+            
+            # 解析命令
+            parts = message_text.split()
+            command = parts[0][1:].lower()  # 移除 '/' 前缀
+            
+            if command == "help":
+                await self._send_help_message(event)
+            elif command == "status":
+                await self._send_status_message(event)
+            elif command == "download":
+                await self._handle_telegram_download_command(event, parts[1:])
+            else:
+                await event.respond("❌ 未知命令，请使用 /help 查看可用命令")
+                
+        except Exception as e:
+            logger.error(f"❌ 处理Telegram命令时出错: {e}")
+            await event.respond(f"❌ 命令处理失败: {str(e)}")
+    
+    async def _send_help_message(self, event):
+        """发送帮助消息"""
+        help_text = """🎮 **可用命令：**
+
+📥 `/download <频道ID> <天数> [数量]` - 下载指定频道指定日期的消息
+   例如: `/download @channel1 0 20` (下载今天的20条消息)
+   例如: `/download @channel1 3 50` (下载3天前的50条消息)
+   例如: `/download -1001234567890 7 30` (下载7天前的30条消息)
+
+📊 `/status` - 显示当前状态
+❓ `/help` - 显示此帮助信息
+
+💡 **提示：**
+  • 频道ID可以是 @username 或数字ID格式
+  • 天数=0表示今天，1表示昨天，以此类推
+  • 数量默认为50条消息
+  • 系统会自动添加随机延迟避免被检测
+  • 只有你本人可以使用这些命令"""
+        
+        await event.respond(help_text)
+    
+    async def _send_status_message(self, event):
+        """发送状态消息"""
+        status_text = f"""📊 **当前状态：**
+
+🔗 客户端连接: {'✅ 已连接' if self.client and self.client.is_connected() else '❌ 未连接'}
+📡 监听频道数: {len(self.config.source_channels)}
+🎯 目标频道: `{self.config.target_channel_id}`
+⏱️ 随机延迟: {self.random_delay_min}-{self.random_delay_max}秒
+📦 批量延迟: {self.batch_delay_min}-{self.batch_delay_max}秒
+📁 下载路径: `{self.config.download_path}`
+📏 最大文件: {self.config.max_file_size / (1024**3):.1f}GB
+
+📋 **监听的源频道：**
+{chr(10).join([f'  • `{ch}`' for ch in self.config.source_channels])}
+
+🤖 **User Client 状态：** ✅ 正常运行"""
+        
+        await event.respond(status_text)
+    
+    async def _handle_telegram_download_command(self, event, args):
+        """处理Telegram下载命令"""
+        if len(args) < 2:
+            await event.respond("""❌ **使用方法：**
+`/download <频道ID> <天数> [数量]`
+
+**例如：**
+• `/download @channel1 0 20` (下载今天的20条消息)
+• `/download @channel1 3 50` (下载3天前的50条消息)""")
+            return
+        
+        try:
+            channel_id = args[0]
+            days_ago = int(args[1])
+            limit = int(args[2]) if len(args) > 2 else 50
+            
+            await event.respond(f"🚀 开始执行下载命令...\n📡 频道: `{channel_id}`\n📅 日期: {days_ago}天前\n📊 数量: {limit}条消息")
+            
+            # 执行下载
+            count = await self.command_download_by_channel_date(channel_id, days_ago, limit)
+            
+            await event.respond(f"✅ **下载完成！**\n📊 成功处理了 **{count}** 条消息")
+            
+        except ValueError:
+            await event.respond("❌ 参数错误：天数和数量必须是数字")
+        except Exception as e:
+            logger.error(f"❌ Telegram下载命令执行失败: {e}")
+            await event.respond(f"❌ 下载失败: {str(e)}")
         
     async def start_client(self):
         """启动 Telethon 客户端"""
@@ -90,18 +210,43 @@ class TelegramUserClient:
             return False
     
     async def setup_handlers(self):
-        """设置事件处理器"""
+        """设置事件处理器 - 支持多源频道"""
         try:
-            # 获取源频道实体
-            source_entity = await self.client.get_entity(self.config.source_channel_id)
-            logger.info(f"✅ 已连接到源频道: {getattr(source_entity, 'title', 'Unknown')}")
+            # 获取所有源频道实体
+            source_entities = []
+            for channel_id in self.config.source_channels:
+                try:
+                    entity = await self.client.get_entity(channel_id)
+                    source_entities.append(entity)
+                    logger.info(f"✅ 已连接到源频道: {getattr(entity, 'title', 'Unknown')} ({channel_id})")
+                except Exception as e:
+                    logger.error(f"❌ 无法连接到频道 {channel_id}: {e}")
+                    continue
             
-            # 新消息事件处理器
-            @self.client.on(events.NewMessage(chats=source_entity))
+            if not source_entities:
+                raise ValueError("没有成功连接到任何源频道")
+            
+            # 为所有源频道设置新消息事件处理器
+            @self.client.on(events.NewMessage(chats=source_entities))
             async def handle_new_message(event):
+                # 添加频道信息到日志
+                channel_title = getattr(event.chat, 'title', 'Unknown')
+                logger.info(f"📨 来自频道 '{channel_title}' 的新消息")
                 await self._handle_message(event.message)
             
-            logger.info("✅ 事件处理器已设置，开始监听新消息...")
+            # 设置私聊命令处理器（用于手动控制）
+            @self.client.on(events.NewMessage(pattern=r'^/(download|status|help)', incoming=True))
+            async def command_handler(event):
+                if event.is_private:  # 只处理私聊消息
+                    logger.info(f"📱 收到私聊命令: {event.message.text}")
+                    await self._handle_command_message(event)
+            
+            logger.info(f"✅ 事件处理器已设置，正在监听 {len(source_entities)} 个源频道的新消息...")
+            logger.info("✅ 私聊命令处理器已设置 (/download, /status, /help)")
+            
+            # 显示监听的频道列表
+            for entity in source_entities:
+                logger.info(f"   📡 监听频道: {getattr(entity, 'title', 'Unknown')}")
             
         except Exception as e:
             logger.error(f"设置事件处理器失败: {e}")
@@ -127,10 +272,8 @@ class TelegramUserClient:
         """处理单独的消息 (复用原有逻辑)"""
         logger.info(f"🔄 开始处理单独消息 {message.id}")
         
-        # 添加随机延迟（1-10秒）
-        delay = random.uniform(1, 10)
-        logger.info(f"⏰ 消息 {message.id} 将在 {delay:.1f} 秒后发布")
-        await asyncio.sleep(delay)
+        # 添加智能随机延迟
+        await self.smart_delay("normal")
             
             # 检查消息是否包含媒体
         if self.bot_handler.has_media(message):
@@ -260,10 +403,8 @@ class TelegramUserClient:
             
             logger.info(f"开始下载媒体组 {media_group_id}，包含 {len(messages)} 条消息")
             
-            # 添加随机延迟（1-10秒）
-            delay = random.uniform(1, 10)
-            logger.info(f"媒体组 {media_group_id} 将在 {delay:.1f} 秒后开始下载")
-            await asyncio.sleep(delay)
+            # 添加智能随机延迟
+            await self.smart_delay("normal")
             
             # 设置下载进度监控
             group_data['timer'] = asyncio.create_task(
@@ -348,31 +489,43 @@ class TelegramUserClient:
             except Exception as e:
                 logger.error(f"清理文件 {file_info} 失败: {e}")
     
-    async def manual_download_command(self, count: int = 5):
-        """手动下载命令 - 随机下载N个历史消息"""
+    async def download_history_messages(self, limit: int = 100, offset_days: int = 0):
+        """下载历史消息 - 支持按时间范围和数量限制"""
         try:
-            logger.info(f"🔄 开始手动随机下载 {count} 条历史消息...")
+            from datetime import datetime, timedelta
+            
+            logger.info(f"🔄 开始下载最近 {limit} 条历史消息（{offset_days}天前开始）...")
             
             # 获取源频道实体
             source_entity = await self.client.get_entity(self.config.source_channel_id)
             
+            # 计算开始时间
+            if offset_days > 0:
+                offset_date = datetime.now() - timedelta(days=offset_days)
+                logger.info(f"📅 获取 {offset_date.strftime('%Y-%m-%d')} 之后的消息")
+            else:
+                offset_date = None
+            
             # 获取历史消息
             messages = []
-            async for message in self.client.iter_messages(source_entity, limit=100):
+            async for message in self.client.iter_messages(
+                source_entity, 
+                limit=limit,
+                offset_date=offset_date
+            ):
                 if self.bot_handler.has_media(message) or message.text:
                     messages.append(message)
             
             if not messages:
-                logger.warning("❌ 源频道没有找到历史消息")
+                logger.warning("❌ 没有找到符合条件的历史消息")
                 return 0
             
-            # 随机选择N条消息
-            selected_messages = random.sample(messages, min(count, len(messages)))
+            logger.info(f"📋 找到 {len(messages)} 条历史消息，开始处理...")
             
             success_count = 0
-            for i, message in enumerate(selected_messages, 1):
+            for i, message in enumerate(messages, 1):
                 try:
-                    logger.info(f"📥 正在处理第 {i}/{len(selected_messages)} 条消息...")
+                    logger.info(f"📥 正在处理第 {i}/{len(messages)} 条历史消息 (ID: {message.id})...")
                     
                     # 检查消息是否包含媒体
                     if self.bot_handler.has_media(message):
@@ -383,28 +536,122 @@ class TelegramUserClient:
                             # 转发消息到目标频道
                             await self.bot_handler.forward_message(message, downloaded_files, self.client)
                             success_count += 1
-                            logger.info(f"成功转发历史消息 {message.id} 到目标频道")
+                            logger.info(f"✅ 成功转发历史媒体消息 {message.id}")
                             
                             # 自动清理已成功发布的文件
                             await self._cleanup_files(downloaded_files)
                         else:
-                            logger.warning(f"历史消息 {message.id} 没有可下载的媒体文件")
+                            logger.warning(f"⚠️ 历史消息 {message.id} 没有可下载的媒体文件")
                     else:
                         # 转发纯文本消息
                         await self.bot_handler.forward_text_message(message, self.client)
                         success_count += 1
-                        logger.info(f"成功转发历史文本消息 {message.id} 到目标频道")
+                        logger.info(f"✅ 成功转发历史文本消息 {message.id}")
+                    
+                    # 添加智能延迟避免频率限制
+                    await self.smart_delay("short")
                         
                 except Exception as e:
-                    logger.error(f"处理历史消息 {message.id} 时出错: {e}")
+                    logger.error(f"❌ 处理历史消息 {message.id} 时出错: {e}")
                     continue
             
-            logger.info(f"✅ 手动下载完成！成功处理: {success_count}/{len(selected_messages)} 条消息")
+            logger.info(f"🎉 历史消息处理完成！成功处理: {success_count}/{len(messages)} 条消息")
             return success_count
             
         except Exception as e:
-            logger.error(f"手动下载命令执行出错: {e}")
+            logger.error(f"❌ 下载历史消息时出错: {e}")
             return 0
+    
+    async def manual_download_command(self, count: int = 5):
+        """手动下载命令 - 随机下载N个历史消息"""
+        return await self.download_history_messages(limit=count)
+    
+    async def command_download_by_channel_date(self, channel_id: str, days_ago: int = 0, limit: int = 50):
+        """手动命令：下载指定频道指定日期的消息"""
+        try:
+            logger.info(f"🎮 手动下载命令：频道 {channel_id}，{days_ago}天前的消息，限制 {limit} 条")
+            
+            # 获取频道实体
+            try:
+                entity = await self.client.get_entity(channel_id)
+                logger.info(f"✅ 已连接到频道: {getattr(entity, 'title', 'Unknown')}")
+            except Exception as e:
+                logger.error(f"❌ 无法连接到频道 {channel_id}: {e}")
+                return 0
+            
+            # 计算日期范围
+            if days_ago > 0:
+                target_date = datetime.now() - timedelta(days=days_ago)
+                end_date = target_date + timedelta(days=1)  # 第二天开始
+                logger.info(f"📅 下载日期范围: {target_date.strftime('%Y-%m-%d')} 的消息")
+            else:
+                target_date = None
+                end_date = None
+                logger.info(f"📅 下载最新的 {limit} 条消息")
+            
+            # 获取消息
+            messages = []
+            async for message in self.client.iter_messages(
+                entity,
+                limit=limit * 2,  # 多获取一些，因为要过滤
+                offset_date=end_date if end_date else None
+            ):
+                # 如果指定了日期，检查消息日期
+                if target_date:
+                    if message.date.date() != target_date.date():
+                        continue
+                
+                # 只处理有内容的消息
+                if self.bot_handler.has_media(message) or message.text:
+                    messages.append(message)
+                    if len(messages) >= limit:
+                        break
+            
+            if not messages:
+                logger.warning(f"❌ 在频道 {channel_id} 中没有找到符合条件的消息")
+                return 0
+            
+            logger.info(f"📋 找到 {len(messages)} 条符合条件的消息，开始处理...")
+            
+            # 添加批量操作延迟
+            await self.smart_delay("batch")
+            
+            success_count = 0
+            for i, message in enumerate(messages, 1):
+                try:
+                    logger.info(f"📥 处理第 {i}/{len(messages)} 条消息 (ID: {message.id}, 时间: {message.date})")
+                    
+                    # 智能延迟
+                    await self.smart_delay("short")
+                    
+                    # 处理消息
+                    if self.bot_handler.has_media(message):
+                        downloaded_files = await self.media_downloader.download_media(message, self.client)
+                        if downloaded_files:
+                            await self.bot_handler.forward_message(message, downloaded_files, self.client)
+                            await self._cleanup_files(downloaded_files)
+                            success_count += 1
+                            logger.info(f"✅ 成功转发媒体消息 {message.id}")
+                    else:
+                        await self.bot_handler.forward_text_message(message, self.client)
+                        success_count += 1
+                        logger.info(f"✅ 成功转发文本消息 {message.id}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ 处理消息 {message.id} 时出错: {e}")
+                    continue
+            
+            logger.info(f"🎉 手动下载完成！成功处理: {success_count}/{len(messages)} 条消息")
+            return success_count
+            
+        except Exception as e:
+            logger.error(f"❌ 手动下载命令执行出错: {e}")
+            return 0
+    
+    
+    
+    
+    
     
     async def run(self):
         """运行用户客户端"""
@@ -420,12 +667,26 @@ class TelegramUserClient:
             
             logger.info("🎯 User Client 已启动，开始监听消息...")
             logger.info("📋 功能说明:")
-            logger.info("  • 自动监听源频道新消息并转发")
+            logger.info(f"  • 自动监听 {len(self.config.source_channels)} 个源频道新消息并转发")
             logger.info("  • 支持2GB大文件下载（无20MB限制）")
             logger.info("  • 自动处理媒体组消息")
             logger.info("  • 支持所有媒体类型")
+            logger.info("  • 支持历史消息批量下载")
             
-            # 运行客户端直到断开连接
+            # 显示所有监听的频道
+            logger.info("📡 监听的源频道:")
+            for channel in self.config.source_channels:
+                logger.info(f"   - {channel}")
+            
+            # 程序已启动，等待事件（纯后台运行）
+            logger.info("🎯 User Client 已启动，开始监听消息...")
+            logger.info("📋 功能说明:")
+            logger.info("  • 自动监听源频道新消息并转发")
+            logger.info("  • 支持2GB大文件下载（无20MB限制）")
+            logger.info("  • 私聊发送命令控制: /help, /status, /download")
+            logger.info("🤖 程序将在后台持续运行...")
+            
+            # 运行客户端直到断开连接（纯后台模式）
             await self.client.run_until_disconnected()
             
         except asyncio.CancelledError:

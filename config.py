@@ -20,6 +20,13 @@ class Config:
         self.source_channel_id = self._get_required_env('SOURCE_CHANNEL_ID')
         self.target_channel_id = self._get_required_env('TARGET_CHANNEL_ID')
         
+        # 多源频道配置 (可选)
+        source_channels_str = os.getenv('SOURCE_CHANNELS', '')
+        if source_channels_str:
+            self.source_channels = [ch.strip() for ch in source_channels_str.split(',') if ch.strip()]
+        else:
+            self.source_channels = [self.source_channel_id]  # 默认使用单个源频道
+        
         # 会话设置
         self.session_name = os.getenv('SESSION_NAME', 'telegram_session')
         self.session_path = Path(os.getenv('SESSION_PATH', './'))
@@ -27,6 +34,12 @@ class Config:
         # 下载设置
         self.download_path = os.getenv('DOWNLOAD_PATH', './downloads')
         self.max_file_size = self._parse_file_size(os.getenv('MAX_FILE_SIZE', '2GB'))  # User API 支持 2GB
+        
+        # 随机延迟设置
+        self.random_delay_min = int(os.getenv('RANDOM_DELAY_MIN', '2'))
+        self.random_delay_max = int(os.getenv('RANDOM_DELAY_MAX', '15'))
+        self.batch_delay_min = int(os.getenv('BATCH_DELAY_MIN', '30'))
+        self.batch_delay_max = int(os.getenv('BATCH_DELAY_MAX', '120'))
         
         # 验证配置
         self._validate_config()
