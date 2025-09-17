@@ -22,6 +22,7 @@ from telethon.errors import RPCError
 from bot_handler import TelegramBotHandler
 from media_downloader import MediaDownloader
 from config import Config
+from message_queue import MessageQueue
 
 # 加载环境变量
 load_dotenv()
@@ -44,6 +45,9 @@ class TelegramUserClient:
         self.bot_handler = TelegramBotHandler(self.config)
         self.media_downloader = MediaDownloader(self.config)
         self.client = None
+        
+        # 消息队列系统
+        self.message_queue = MessageQueue(self.config)
         
         # 媒体组缓存 (复用原有逻辑)
         self.media_groups = {}  # {media_group_id: {'messages': [], 'timer': asyncio.Task, 'last_message_time': float, 'status': str, 'download_start_time': float}}
@@ -95,6 +99,10 @@ class TelegramUserClient:
                 await self._send_status_message(event)
             elif command == "download":
                 await self._handle_telegram_download_command(event, parts[1:])
+            elif command == "queue":
+                await self._handle_queue_command(event, parts[1:])
+            elif command == "mode":
+                await self._handle_mode_command(event, parts[1:])
             else:
                 await event.respond("❌ 未知命令，请使用 /help 查看可用命令")
                 
@@ -111,13 +119,24 @@ class TelegramUserClient:
    例如: `/download @channel1 3 50` (下载3天前的50条消息)
    例如: `/download -1001234567890 7 30` (下载7天前的30条消息)
 
-📊 `/status` - 显示当前状态
+📊 `/status` - 显示当前状态和队列信息
+📋 `/queue <操作>` - 队列管理命令
+   `/queue status` - 查看队列状态
+   `/queue clear` - 清空队列
+   `/queue start` - 启动队列处理
+   `/queue stop` - 停止队列处理
+
+🔄 `/mode <模式>` - 切换转发模式
+   `/mode immediate` - 立即转发模式
+   `/mode queue` - 队列延迟转发模式
+
 ❓ `/help` - 显示此帮助信息
 
 💡 **提示：**
   • 频道ID可以是 @username 或数字ID格式
   • 天数=0表示今天，1表示昨天，以此类推
   • 数量默认为50条消息
+  • 队列模式支持延迟发送和批量处理
   • 系统会自动添加随机延迟避免被检测
   • 只有你本人可以使用这些命令"""
         
@@ -125,7 +144,11 @@ class TelegramUserClient:
     
     async def _send_status_message(self, event):
         """发送状态消息"""
-        status_text = f"""📊 **当前状态：**
+        # 获取队列状态
+        queue_status = self.message_queue.get_status()
+        
+        # 构建基本状态信息
+        status_text = f"""📊 **系统状态：**
 
 🔗 客户端连接: {'✅ 已连接' if self.client and self.client.is_connected() else '❌ 未连接'}
 📡 监听频道数: {len(self.config.source_channels)}
@@ -135,10 +158,34 @@ class TelegramUserClient:
 📁 下载路径: `{self.config.download_path}`
 📏 最大文件: {self.config.max_file_size / (1024**3):.1f}GB
 
-📋 **监听的源频道：**
-{chr(10).join([f'  • `{ch}`' for ch in self.config.source_channels])}
+🔄 **转发模式：** {'📋 队列延迟转发' if queue_status['enabled'] else '⚡ 立即转发'}
 
-🤖 **User Client 状态：** ✅ 正常运行"""
+📋 **监听的源频道：**
+{chr(10).join([f'  • `{ch}`' for ch in self.config.source_channels])}"""
+
+        # 添加队列状态信息
+        if queue_status['enabled']:
+            next_send_text = "无待发送消息"
+            if queue_status['next_send_in_seconds'] is not None:
+                minutes = int(queue_status['next_send_in_seconds'] // 60)
+                seconds = int(queue_status['next_send_in_seconds'] % 60)
+                next_send_text = f"{minutes}分{seconds}秒后"
+            
+            queue_text = f"""
+
+📋 **队列状态：**
+🔄 队列处理: {'✅ 运行中' if queue_status['processing'] else '❌ 已停止'}
+📊 待发送: {queue_status['pending_count']} 条消息
+⏰ 可发送: {queue_status['ready_count']} 条消息
+📈 总统计: {queue_status['total_queued']} 入队 | {queue_status['total_sent']} 已发送 | {queue_status['total_failed']} 失败
+⏳ 下次发送: {next_send_text}
+📦 队列限制: {queue_status['queue_size_limit']} 条消息
+🚀 批量模式: {'✅ 启用' if queue_status['batch_mode'] else '❌ 禁用'}"""
+            status_text += queue_text
+
+        status_text += f"""
+
+🤖 **运行状态：** ✅ 正常运行"""
         
         await event.respond(status_text)
     
@@ -269,17 +316,57 @@ class TelegramUserClient:
             logger.error(f"处理消息 {message.id} 时出错: {e}")
     
     async def _handle_single_message(self, message: Message):
-        """处理单独的消息 (复用原有逻辑)"""
+        """处理单独的消息 - 支持队列系统"""
         logger.info(f"🔄 开始处理单独消息 {message.id}")
+        
+        # 获取频道标题
+        channel_title = getattr(message.chat, 'title', 'Unknown')
+        
+        # 检查是否启用队列模式
+        if self.config.queue_enabled:
+            await self._handle_message_with_queue(message, channel_title)
+        else:
+            await self._handle_message_immediate(message)
+    
+    async def _handle_message_with_queue(self, message: Message, channel_title: str):
+        """使用队列模式处理消息"""
+        logger.info(f"📋 队列模式：处理消息 {message.id}")
+        
+        downloaded_files = []
+        
+        # 检查消息是否包含媒体
+        if self.bot_handler.has_media(message):
+            logger.info(f"📥 消息 {message.id} 包含媒体，开始下载...")
+            
+            try:
+                downloaded_files = await self.media_downloader.download_media(message, self.client)
+                
+                if downloaded_files:
+                    logger.info(f"📥 消息 {message.id} 下载完成，共 {len(downloaded_files)} 个文件")
+                else:
+                    logger.warning(f"⚠️ 消息 {message.id} 没有可下载的媒体文件")
+                    
+            except Exception as e:
+                logger.error(f"❌ 消息 {message.id} 下载失败: {e}")
+                return
+        
+        # 添加到队列（包括纯文本消息）
+        success = await self.message_queue.add_message(message, downloaded_files, channel_title)
+        if not success:
+            # 队列添加失败，清理已下载的文件
+            await self._cleanup_files(downloaded_files)
+    
+    async def _handle_message_immediate(self, message: Message):
+        """立即模式处理消息（原有逻辑）"""
+        logger.info(f"⚡ 立即模式：处理消息 {message.id}")
         
         # 添加智能随机延迟
         await self.smart_delay("normal")
             
-            # 检查消息是否包含媒体
+        # 检查消息是否包含媒体
         if self.bot_handler.has_media(message):
             logger.info(f"📥 消息 {message.id} 包含媒体，开始下载...")
             
-                # 下载媒体文件
             try:
                 downloaded_files = await self.media_downloader.download_media(message, self.client)
                 
@@ -648,10 +735,151 @@ class TelegramUserClient:
             logger.error(f"❌ 手动下载命令执行出错: {e}")
             return 0
     
+    async def _handle_queue_command(self, event, args):
+        """处理队列管理命令"""
+        if not args:
+            await event.respond("""❌ **使用方法：**
+`/queue <操作>`
+
+**可用操作：**
+• `/queue status` - 查看详细队列状态
+• `/queue clear` - 清空队列
+• `/queue start` - 启动队列处理
+• `/queue stop` - 停止队列处理""")
+            return
+        
+        operation = args[0].lower()
+        
+        try:
+            if operation == "status":
+                await self._send_queue_status(event)
+            elif operation == "clear":
+                count = self.message_queue.clear_queue()
+                await event.respond(f"🧹 **队列已清空**\n移除了 {count} 条待发送消息")
+            elif operation == "start":
+                if not self.message_queue.processing:
+                    await self.message_queue.start_processing(self.bot_handler, self.client)
+                    await event.respond("🚀 **队列处理器已启动**")
+                else:
+                    await event.respond("⚠️ 队列处理器已在运行")
+            elif operation == "stop":
+                if self.message_queue.processing:
+                    await self.message_queue.stop_processing()
+                    await event.respond("🛑 **队列处理器已停止**")
+                else:
+                    await event.respond("⚠️ 队列处理器已停止")
+            else:
+                await event.respond("❌ 未知队列操作，请使用 `/queue` 查看可用操作")
+        
+        except Exception as e:
+            logger.error(f"❌ 队列命令执行失败: {e}")
+            await event.respond(f"❌ 操作失败: {str(e)}")
     
+    async def _send_queue_status(self, event):
+        """发送详细队列状态"""
+        queue_status = self.message_queue.get_status()
+        
+        if not queue_status['enabled']:
+            await event.respond("📋 **队列状态：** ❌ 队列模式未启用\n使用 `/mode queue` 启用队列模式")
+            return
+        
+        # 下次发送时间格式化
+        next_send_text = "无待发送消息"
+        if queue_status['next_send_in_seconds'] is not None:
+            total_seconds = int(queue_status['next_send_in_seconds'])
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            
+            if hours > 0:
+                next_send_text = f"{hours}时{minutes}分{seconds}秒后"
+            elif minutes > 0:
+                next_send_text = f"{minutes}分{seconds}秒后"
+            else:
+                next_send_text = f"{seconds}秒后"
+        
+        status_text = f"""📋 **详细队列状态：**
+
+🔄 **处理状态：** {'✅ 运行中' if queue_status['processing'] else '❌ 已停止'}
+📊 **队列统计：**
+  • 待发送消息: {queue_status['pending_count']} 条
+  • 可立即发送: {queue_status['ready_count']} 条
+  • 队列容量: {queue_status['pending_count']}/{queue_status['queue_size_limit']} 条
+
+📈 **历史统计：**
+  • 总入队: {queue_status['total_queued']} 条
+  • 已发送: {queue_status['total_sent']} 条
+  • 发送失败: {queue_status['total_failed']} 条
+  • 成功率: {(queue_status['total_sent']/(queue_status['total_queued']+0.001)*100):.1f}%
+
+⏰ **时间信息：**
+  • 下次发送: {next_send_text}
+  • 检查间隔: {self.config.queue_check_interval} 秒
+
+🚀 **配置信息：**
+  • 发送延迟: {self.config.min_send_delay//60}-{self.config.max_send_delay//60} 分钟
+  • 批量模式: {'✅ 启用' if queue_status['batch_mode'] else '❌ 禁用'}"""
+
+        if queue_status['batch_mode']:
+            status_text += f"""
+  • 批次大小: {self.config.batch_size} 条消息
+  • 批次间隔: {self.config.batch_interval//60} 分钟"""
+
+        await event.respond(status_text)
     
-    
-    
+    async def _handle_mode_command(self, event, args):
+        """处理模式切换命令"""
+        if not args:
+            current_mode = "队列延迟转发" if self.config.queue_enabled else "立即转发"
+            await event.respond(f"""🔄 **当前转发模式：** {current_mode}
+
+**切换模式：**
+• `/mode immediate` - 立即转发模式
+• `/mode queue` - 队列延迟转发模式
+
+**模式说明：**
+• **立即转发：** 收到消息后立即下载并转发（2-15秒延迟）
+• **队列转发：** 收到消息后下载并加入队列，延迟一段时间后发送（5分钟-2小时）""")
+            return
+        
+        mode = args[0].lower()
+        
+        try:
+            if mode == "immediate":
+                # 切换到立即模式
+                if self.config.queue_enabled:
+                    # 停止队列处理器
+                    await self.message_queue.stop_processing()
+                    self.config.queue_enabled = False
+                    await event.respond("""⚡ **已切换到立即转发模式**
+
+✅ 消息将在收到后立即处理和转发
+⏰ 延迟：2-15秒随机延迟
+📋 队列处理器已停止""")
+                else:
+                    await event.respond("⚠️ 当前已是立即转发模式")
+            
+            elif mode == "queue":
+                # 切换到队列模式
+                if not self.config.queue_enabled:
+                    self.config.queue_enabled = True
+                    # 启动队列处理器
+                    await self.message_queue.start_processing(self.bot_handler, self.client)
+                    await event.respond(f"""📋 **已切换到队列延迟转发模式**
+
+✅ 消息将下载后加入队列延迟发送
+⏰ 延迟：{self.config.min_send_delay//60}-{self.config.max_send_delay//60}分钟随机延迟
+🚀 队列处理器已启动
+📊 队列容量：{self.config.max_queue_size}条消息""")
+                else:
+                    await event.respond("⚠️ 当前已是队列延迟转发模式")
+            
+            else:
+                await event.respond("❌ 未知模式，请使用 `immediate` 或 `queue`")
+        
+        except Exception as e:
+            logger.error(f"❌ 模式切换失败: {e}")
+            await event.respond(f"❌ 模式切换失败: {str(e)}")
     
     async def run(self):
         """运行用户客户端"""
@@ -665,6 +893,13 @@ class TelegramUserClient:
             # 设置事件处理器
             await self.setup_handlers()
             
+            # 启动消息队列处理器（如果启用）
+            if self.config.queue_enabled:
+                await self.message_queue.start_processing(self.bot_handler, self.client)
+                logger.info("🚀 消息队列处理器已启动")
+            else:
+                logger.info("⚡ 使用立即转发模式")
+            
             logger.info("🎯 User Client 已启动，开始监听消息...")
             logger.info("📋 功能说明:")
             logger.info(f"  • 自动监听 {len(self.config.source_channels)} 个源频道新消息并转发")
@@ -672,19 +907,25 @@ class TelegramUserClient:
             logger.info("  • 自动处理媒体组消息")
             logger.info("  • 支持所有媒体类型")
             logger.info("  • 支持历史消息批量下载")
+            logger.info(f"  • 转发模式: {'📋 队列延迟转发' if self.config.queue_enabled else '⚡ 立即转发'}")
             
             # 显示所有监听的频道
             logger.info("📡 监听的源频道:")
             for channel in self.config.source_channels:
                 logger.info(f"   - {channel}")
             
-            # 程序已启动，等待事件（纯后台运行）
-            logger.info("🎯 User Client 已启动，开始监听消息...")
-            logger.info("📋 功能说明:")
-            logger.info("  • 自动监听源频道新消息并转发")
-            logger.info("  • 支持2GB大文件下载（无20MB限制）")
-            logger.info("  • 私聊发送命令控制: /help, /status, /download")
+            # 显示队列配置信息
+            if self.config.queue_enabled:
+                logger.info("📋 队列配置:")
+                logger.info(f"   - 发送延迟: {self.config.min_send_delay//60}-{self.config.max_send_delay//60} 分钟")
+                logger.info(f"   - 队列大小: {self.config.max_queue_size} 条消息")
+                logger.info(f"   - 批量模式: {'启用' if self.config.batch_send_enabled else '禁用'}")
+                if self.config.batch_send_enabled:
+                    logger.info(f"   - 批次大小: {self.config.batch_size} 条消息")
+                    logger.info(f"   - 批次间隔: {self.config.batch_interval//60} 分钟")
+            
             logger.info("🤖 程序将在后台持续运行...")
+            logger.info("💬 私聊发送命令控制: /help, /status, /download, /queue")
             
             # 运行客户端直到断开连接（纯后台模式）
             await self.client.run_until_disconnected()
@@ -696,6 +937,11 @@ class TelegramUserClient:
             logger.error(f"用户客户端运行出错: {e}")
             raise
         finally:
+            # 停止消息队列处理器
+            if self.config.queue_enabled:
+                await self.message_queue.stop_processing()
+                logger.info("🛑 消息队列处理器已停止")
+            
             # 确保客户端被正确关闭
             if self.client and self.client.is_connected():
                 try:

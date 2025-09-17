@@ -41,6 +41,22 @@ class Config:
         self.batch_delay_min = int(os.getenv('BATCH_DELAY_MIN', '30'))
         self.batch_delay_max = int(os.getenv('BATCH_DELAY_MAX', '120'))
         
+        # 消息队列设置
+        self.queue_enabled = os.getenv('QUEUE_ENABLED', 'false').lower() == 'true'
+        self.min_send_delay = int(os.getenv('MIN_SEND_DELAY', '300'))  # 5分钟
+        self.max_send_delay = int(os.getenv('MAX_SEND_DELAY', '7200'))  # 2小时
+        self.queue_check_interval = int(os.getenv('QUEUE_CHECK_INTERVAL', '30'))  # 30秒
+        self.max_queue_size = int(os.getenv('MAX_QUEUE_SIZE', '100'))
+        
+        # 分批发送设置
+        self.batch_send_enabled = os.getenv('BATCH_SEND_ENABLED', 'false').lower() == 'true'
+        self.batch_size = int(os.getenv('BATCH_SIZE', '5'))
+        self.batch_interval = int(os.getenv('BATCH_INTERVAL', '1800'))  # 30分钟
+        
+        # 队列持久化设置
+        self.queue_save_path = os.getenv('QUEUE_SAVE_PATH', './queue_data.json')
+        self.auto_save_queue = os.getenv('AUTO_SAVE_QUEUE', 'true').lower() == 'true'
+        
         # 验证配置
         self._validate_config()
     
