@@ -57,6 +57,24 @@ class Config:
         self.queue_save_path = os.getenv('QUEUE_SAVE_PATH', './queue_data.json')
         self.auto_save_queue = os.getenv('AUTO_SAVE_QUEUE', 'true').lower() == 'true'
         
+        # 代理设置
+        self.proxy_enabled = os.getenv('PROXY_ENABLED', 'false').lower() == 'true'
+        self.proxy_type = os.getenv('PROXY_TYPE', 'socks5')  # socks5, socks4, http
+        self.proxy_host = os.getenv('PROXY_HOST', '')
+        self.proxy_port = int(os.getenv('PROXY_PORT', '1080'))
+        self.proxy_username = os.getenv('PROXY_USERNAME', '')
+        self.proxy_password = os.getenv('PROXY_PASSWORD', '')
+        self.proxy_rdns = os.getenv('PROXY_RDNS', 'true').lower() == 'true'
+        
+        # 代理轮换设置 (高级功能)
+        self.proxy_rotation_enabled = os.getenv('PROXY_ROTATION_ENABLED', 'false').lower() == 'true'
+        self.proxy_rotation_interval = int(os.getenv('PROXY_ROTATION_INTERVAL', '3600'))  # 1小时
+        self.proxy_list_file = os.getenv('PROXY_LIST_FILE', './proxy_list.txt')
+        
+        # 代理测试设置
+        self.proxy_test_enabled = os.getenv('PROXY_TEST_ENABLED', 'true').lower() == 'true'
+        self.proxy_test_timeout = int(os.getenv('PROXY_TEST_TIMEOUT', '10'))  # 10秒
+        
         # 验证配置
         self._validate_config()
     
@@ -126,9 +144,65 @@ class Config:
         # 验证文件大小限制
         if self.max_file_size <= 0:
             raise ValueError("最大文件大小必须大于0")
+        
+        # 验证代理配置
+        if self.proxy_enabled:
+            if not self.proxy_host:
+                raise ValueError("启用代理时必须设置 PROXY_HOST")
+            
+            if self.proxy_type not in ['socks5', 'socks4', 'http']:
+                raise ValueError("PROXY_TYPE 必须是 socks5、socks4 或 http")
+            
+            if not (1 <= self.proxy_port <= 65535):
+                raise ValueError("PROXY_PORT 必须在 1-65535 范围内")
+    
+    def get_proxy_config(self):
+        """获取代理配置字典，供Telethon使用"""
+        if not self.proxy_enabled:
+            return None
+        
+        # 导入socks模块来获取代理类型常量
+        try:
+            import socks
+        except ImportError:
+            raise ImportError("需要安装 PySocks: pip install PySocks")
+        
+        # 映射代理类型
+        proxy_type_map = {
+            'socks5': socks.SOCKS5,
+            'socks4': socks.SOCKS4,
+            'http': socks.HTTP
+        }
+        
+        proxy_config = {
+            'proxy_type': proxy_type_map[self.proxy_type],
+            'addr': self.proxy_host,
+            'port': self.proxy_port,
+            'rdns': self.proxy_rdns
+        }
+        
+        # 如果有用户名和密码，添加认证信息
+        if self.proxy_username and self.proxy_password:
+            proxy_config['username'] = self.proxy_username
+            proxy_config['password'] = self.proxy_password
+        
+        return proxy_config
+    
+    def get_proxy_info_string(self):
+        """获取代理信息的字符串表示（用于日志）"""
+        if not self.proxy_enabled:
+            return "🚫 代理未启用"
+        
+        auth_info = ""
+        if self.proxy_username:
+            auth_info = f" (认证: {self.proxy_username})"
+        
+        return f"🔗 代理: {self.proxy_type}://{self.proxy_host}:{self.proxy_port}{auth_info}"
     
     def __str__(self):
         """返回配置信息的字符串表示"""
+        proxy_info = self.get_proxy_info_string()
+        
         return f"""
 配置信息:
 - API ID: {self.api_id}
@@ -139,4 +213,6 @@ class Config:
 - 下载路径: {self.download_path}
 - 会话文件: {self.session_path / self.session_name}.session
 - 最大文件大小: {self.max_file_size / (1024*1024*1024):.1f}GB
+- {proxy_info}
+- 队列模式: {'✅ 启用' if self.queue_enabled else '❌ 禁用'}
 """

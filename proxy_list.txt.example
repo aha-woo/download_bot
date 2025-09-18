@@ -1,0 +1,70 @@
+# 代理列表配置文件
+# 支持两种格式：JSON格式和纯文本格式
+
+# === JSON格式 (推荐) ===
+# 将整个文件内容替换为以下JSON格式：
+
+[
+  {
+    "type": "socks5",
+    "host": "residential-proxy1.example.com",
+    "port": 1080,
+    "username": "your_username",
+    "password": "your_password",
+    "name": "住宅代理1"
+  },
+  {
+    "type": "socks5",
+    "host": "residential-proxy2.example.com", 
+    "port": 1080,
+    "username": "your_username",
+    "password": "your_password",
+    "name": "住宅代理2"
+  },
+  {
+    "type": "http",
+    "host": "datacenter-proxy.example.com",
+    "port": 8080,
+    "username": "user",
+    "password": "pass",
+    "name": "数据中心代理"
+  }
+]
+
+# === 纯文本格式 ===
+# 每行一个代理，格式：type://host:port@username:password
+# 如果没有认证，省略@username:password部分
+
+# socks5://residential-proxy1.example.com:1080@your_username:your_password
+# socks5://residential-proxy2.example.com:1080@your_username:your_password  
+# http://datacenter-proxy.example.com:8080@user:pass
+# socks5://no-auth-proxy.example.com:1080
+
+# === 代理类型说明 ===
+# socks5: 最常用的SOCKS5代理（推荐）
+# socks4: SOCKS4代理（较老）
+# http: HTTP代理（适用于HTTP连接）
+
+# === 代理安全等级 ===
+# 🔴 高风险：免费代理、数据中心代理
+# 🟡 中等风险：付费数据中心代理
+# 🟢 低风险：住宅代理、移动网络代理
+
+# === 推荐的代理服务商 ===
+# 住宅代理（最安全）:
+# - Luminati/Bright Data
+# - Smartproxy  
+# - ProxyEmpire
+# - 911Proxy
+
+# 数据中心代理（较便宜）:
+# - ProxyMesh
+# - MyPrivateProxy
+# - StormProxies
+
+# === 配置说明 ===
+# 1. 将此文件重命名为 proxy_list.txt
+# 2. 根据你的代理服务商提供的信息填写实际配置
+# 3. 在 config.env 中设置 PROXY_ROTATION_ENABLED=true 启用轮换
+# 4. 使用 /proxy test 命令测试所有代理的连通性
+# 5. 代理会按设定间隔自动轮换，也可手动执行 /proxy rotate

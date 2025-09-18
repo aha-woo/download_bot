@@ -23,6 +23,7 @@ from bot_handler import TelegramBotHandler
 from media_downloader import MediaDownloader
 from config import Config
 from message_queue import MessageQueue
+from proxy_manager import ProxyManager
 
 # 加载环境变量
 load_dotenv()
@@ -48,6 +49,9 @@ class TelegramUserClient:
         
         # 消息队列系统
         self.message_queue = MessageQueue(self.config)
+        
+        # 代理管理器
+        self.proxy_manager = ProxyManager(self.config)
         
         # 媒体组缓存 (复用原有逻辑)
         self.media_groups = {}  # {media_group_id: {'messages': [], 'timer': asyncio.Task, 'last_message_time': float, 'status': str, 'download_start_time': float}}
@@ -103,9 +107,11 @@ class TelegramUserClient:
                 await self._handle_queue_command(event, parts[1:])
             elif command == "mode":
                 await self._handle_mode_command(event, parts[1:])
+            elif command == "proxy":
+                await self._handle_proxy_command(event, parts[1:])
             else:
                 await event.respond("❌ 未知命令，请使用 /help 查看可用命令")
-                
+            
         except Exception as e:
             logger.error(f"❌ 处理Telegram命令时出错: {e}")
             await event.respond(f"❌ 命令处理失败: {str(e)}")
@@ -129,6 +135,13 @@ class TelegramUserClient:
 🔄 `/mode <模式>` - 切换转发模式
    `/mode immediate` - 立即转发模式
    `/mode queue` - 队列延迟转发模式
+
+🔗 `/proxy [操作]` - 代理管理命令
+   `/proxy` - 查看代理状态
+   `/proxy status` - 查看当前代理
+   `/proxy test` - 测试所有代理
+   `/proxy rotate` - 强制轮换代理
+   `/proxy stats` - 详细统计信息
 
 ❓ `/help` - 显示此帮助信息
 
@@ -199,7 +212,7 @@ class TelegramUserClient:
 • `/download @channel1 0 20` (下载今天的20条消息)
 • `/download @channel1 3 50` (下载3天前的50条消息)""")
             return
-        
+            
         try:
             channel_id = args[0]
             days_ago = int(args[1])
@@ -217,17 +230,172 @@ class TelegramUserClient:
         except Exception as e:
             logger.error(f"❌ Telegram下载命令执行失败: {e}")
             await event.respond(f"❌ 下载失败: {str(e)}")
-        
+    
+    async def _handle_proxy_command(self, event, args):
+        """处理代理相关命令"""
+        try:
+            if not args:
+                # 显示当前代理状态
+                proxy_info = self.proxy_manager.get_current_proxy_info()
+                stats = self.proxy_manager.get_proxy_statistics()
+                
+                status_msg = f"""🔗 **代理状态**
+                
+**当前代理:** {proxy_info}
+
+**统计信息:**
+• 总代理数: {stats['total_proxies']}
+• 当前索引: {stats['current_proxy_index'] + 1}/{stats['total_proxies']}
+• 失败代理数: {stats['failed_proxies_count']}
+• 轮换启用: {'✅' if stats['rotation_enabled'] else '❌'}
+
+**可用命令:**
+• `/proxy status` - 查看代理状态
+• `/proxy test` - 测试所有代理
+• `/proxy rotate` - 强制轮换代理
+• `/proxy stats` - 详细统计信息"""
+                
+                await event.respond(status_msg)
+                return
+            
+            subcommand = args[0].lower()
+            
+            if subcommand == "status":
+                proxy_info = self.proxy_manager.get_current_proxy_info()
+                await event.respond(f"🔗 **当前代理**\n{proxy_info}")
+                
+            elif subcommand == "test":
+                await event.respond("🔍 开始测试所有代理连通性...")
+                results = await self.proxy_manager.test_all_proxies()
+                
+                success_proxies = [name for name, success in results.items() if success]
+                failed_proxies = [name for name, success in results.items() if not success]
+                
+                result_msg = f"""📊 **代理测试结果**
+
+✅ **可用代理 ({len(success_proxies)}):**
+{chr(10).join(f'• {name}' for name in success_proxies) if success_proxies else '无'}
+
+❌ **失败代理 ({len(failed_proxies)}):**
+{chr(10).join(f'• {name}' for name in failed_proxies) if failed_proxies else '无'}
+
+**总成功率:** {len(success_proxies)}/{len(results)} ({len(success_proxies)/len(results)*100:.1f}%)"""
+                
+                await event.respond(result_msg)
+                
+            elif subcommand == "rotate":
+                if await self.proxy_manager.force_rotate_proxy():
+                    new_proxy_info = self.proxy_manager.get_current_proxy_info()
+                    await event.respond(f"✅ **代理已轮换**\n🔗 新代理: {new_proxy_info}")
+                else:
+                    await event.respond("❌ 代理轮换失败（可能只有一个代理或都不可用）")
+                    
+            elif subcommand == "stats":
+                stats = self.proxy_manager.get_proxy_statistics()
+                
+                stats_msg = f"""📊 **详细代理统计**
+
+**基本信息:**
+• 总代理数: {stats['total_proxies']}
+• 当前代理: {stats.get('current_proxy_name', '未知')}
+• 代理地址: {stats.get('current_proxy_host', '未知')}:{stats.get('current_proxy_port', '未知')}
+
+**轮换信息:**
+• 轮换启用: {'✅' if stats['rotation_enabled'] else '❌'}
+• 当前索引: {stats['current_proxy_index'] + 1}/{stats['total_proxies']}
+• 失败代理数: {stats['failed_proxies_count']}
+• 上次轮换时间: {datetime.fromtimestamp(stats['last_rotation_time']).strftime('%Y-%m-%d %H:%M:%S') if stats['last_rotation_time'] else '从未轮换'}"""
+                
+                await event.respond(stats_msg)
+                
+            else:
+                await event.respond("❌ 未知的代理子命令\n\n可用命令: status, test, rotate, stats")
+                
+        except Exception as e:
+            logger.error(f"❌ 代理命令执行失败: {e}")
+            await event.respond(f"❌ 代理命令失败: {str(e)}")
+    
+    async def _test_proxy_connection(self):
+        """测试代理连接"""
+        try:
+            import socket
+            import socks
+            
+            logger.info("🔍 正在测试代理连接...")
+            
+            # 创建socket并设置代理
+            sock = socks.socksocket()
+            
+            # 根据代理类型设置
+            if self.config.proxy_type == 'socks5':
+                proxy_type = socks.SOCKS5
+            elif self.config.proxy_type == 'socks4':
+                proxy_type = socks.SOCKS4
+            else:  # http
+                proxy_type = socks.HTTP
+            
+            # 设置代理
+            if self.config.proxy_username and self.config.proxy_password:
+                sock.set_proxy(
+                    proxy_type,
+                    self.config.proxy_host,
+                    self.config.proxy_port,
+                    username=self.config.proxy_username,
+                    password=self.config.proxy_password
+                )
+            else:
+                sock.set_proxy(
+                    proxy_type,
+                    self.config.proxy_host,
+                    self.config.proxy_port
+                )
+            
+            # 设置超时
+            sock.settimeout(self.config.proxy_test_timeout)
+            
+            # 尝试连接到Telegram的服务器
+            try:
+                sock.connect(('149.154.167.50', 443))  # Telegram DC1
+                sock.close()
+                logger.info("✅ 代理连接测试成功")
+                return True
+            except Exception as connect_error:
+                logger.error(f"❌ 代理连接测试失败: {connect_error}")
+                return False
+                
+        except ImportError:
+            logger.warning("⚠️ 未安装PySocks，跳过代理测试。请运行: pip install PySocks")
+            return True  # 跳过测试，继续执行
+        except Exception as e:
+            logger.error(f"❌ 代理测试过程出错: {e}")
+            return False
+    
     async def start_client(self):
         """启动 Telethon 客户端"""
         try:
             # 创建客户端实例
             session_path = self.config.session_path / f"{self.config.session_name}.session"
-            self.client = TelegramClient(
-                str(session_path),
-                self.config.api_id,
-                self.config.api_hash
-            )
+            
+            # 获取代理配置（通过代理管理器）
+            proxy_config = await self.proxy_manager.get_current_proxy_config()
+            
+            if proxy_config:
+                logger.info(f"🔗 使用代理连接: {self.proxy_manager.get_current_proxy_info()}")
+                
+                # 创建带代理的客户端
+                self.client = TelegramClient(
+                    str(session_path),
+                    self.config.api_id,
+                    self.config.api_hash,
+                    proxy=proxy_config
+                )
+            else:
+                logger.info("🚫 直连模式（未启用代理）")
+                self.client = TelegramClient(
+                    str(session_path),
+                    self.config.api_id,
+                    self.config.api_hash
+                )
             
             # 启动客户端
             await self.client.start(phone=self.config.phone_number)
